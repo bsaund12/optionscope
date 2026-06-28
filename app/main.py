@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy import select
@@ -6,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.alpaca_client import AlpacaClient
 from app.database import Base, database_is_available, engine, get_db
 
 
@@ -25,6 +28,53 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+def find_ticker_or_404(
+    symbol: str,
+    database: Session,
+) -> models.Ticker:
+    """Find one ticker card or explain that it does not exist."""
+
+    normalized_symbol = symbol.strip().upper()
+
+    ticker = database.scalar(
+        select(models.Ticker).where(
+            models.Ticker.symbol == normalized_symbol
+        )
+    )
+
+    if ticker is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ticker '{normalized_symbol}' was not found.",
+        )
+
+    return ticker
+
+
+def to_decimal_or_none(value: Any) -> Optional[Decimal]:
+    """Turn Alpaca values into safe decimal numbers when possible."""
+
+    if value is None:
+        return None
+
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def round_money_or_none(value: Optional[Decimal]) -> Optional[Decimal]:
+    """Round a money value to four decimal places."""
+
+    if value is None:
+        return None
+
+    return value.quantize(
+        Decimal("0.0001"),
+        rounding=ROUND_HALF_UP,
+    )
 
 
 @app.get("/")
@@ -105,6 +155,7 @@ def list_tickers(
 
     return list(database.scalars(statement).all())
 
+
 @app.get(
     "/tickers/{symbol}",
     response_model=schemas.TickerResponse,
@@ -115,18 +166,85 @@ def get_ticker(
 ) -> models.Ticker:
     """Return one saved ticker by its stock symbol."""
 
+    return find_ticker_or_404(symbol, database)
+
+
+@app.get(
+    "/market/stocks/{symbol}/quote",
+    response_model=schemas.StockQuoteResponse,
+)
+def get_stock_quote(symbol: str) -> schemas.StockQuoteResponse:
+    """Get the latest available Alpaca stock quote for one ticker."""
+
     normalized_symbol = symbol.strip().upper()
 
-    ticker = database.scalar(
-        select(models.Ticker).where(
-            models.Ticker.symbol == normalized_symbol
-        )
+    alpaca = AlpacaClient()
+    quote = alpaca.get_latest_stock_quote(normalized_symbol)
+
+    return schemas.StockQuoteResponse(
+        symbol=normalized_symbol,
+        bid_price=quote["bp"],
+        ask_price=quote["ap"],
+        bid_size=quote["bs"],
+        ask_size=quote["as"],
+        timestamp=quote["t"],
+        feed=alpaca.stock_feed,
     )
 
-    if ticker is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Ticker '{normalized_symbol}' was not found.",
+
+@app.get(
+    "/market/stocks/{symbol}/snapshot",
+    response_model=schemas.StockMarketSnapshotResponse,
+)
+def get_stock_market_snapshot(
+    symbol: str,
+) -> schemas.StockMarketSnapshotResponse:
+    """Get a fuller Alpaca market snapshot for one ticker."""
+
+    normalized_symbol = symbol.strip().upper()
+
+    alpaca = AlpacaClient()
+    snapshot = alpaca.get_stock_snapshot(normalized_symbol)
+
+    latest_trade = snapshot.get("latestTrade") or {}
+    latest_quote = snapshot.get("latestQuote") or {}
+    daily_bar = snapshot.get("dailyBar") or {}
+    previous_daily_bar = snapshot.get("prevDailyBar") or {}
+
+    day_close = to_decimal_or_none(daily_bar.get("c"))
+    previous_close = to_decimal_or_none(previous_daily_bar.get("c"))
+
+    day_change: Optional[Decimal] = None
+    day_change_percent: Optional[Decimal] = None
+
+    if day_close is not None and previous_close not in (None, Decimal("0")):
+        day_change = round_money_or_none(day_close - previous_close)
+
+        day_change_percent = round_money_or_none(
+            ((day_close - previous_close) / previous_close) * Decimal("100")
         )
 
-    return ticker
+    return schemas.StockMarketSnapshotResponse(
+        symbol=normalized_symbol,
+
+        last_trade_price=to_decimal_or_none(latest_trade.get("p")),
+        last_trade_timestamp=latest_trade.get("t"),
+
+        bid_price=to_decimal_or_none(latest_quote.get("bp")),
+        ask_price=to_decimal_or_none(latest_quote.get("ap")),
+        bid_size=latest_quote.get("bs"),
+        ask_size=latest_quote.get("as"),
+        quote_timestamp=latest_quote.get("t"),
+
+        day_open=to_decimal_or_none(daily_bar.get("o")),
+        day_high=to_decimal_or_none(daily_bar.get("h")),
+        day_low=to_decimal_or_none(daily_bar.get("l")),
+        day_close=day_close,
+        day_volume=daily_bar.get("v"),
+
+        previous_close=previous_close,
+        day_change=day_change,
+        day_change_percent=day_change_percent,
+
+        feed=alpaca.stock_feed,
+    )

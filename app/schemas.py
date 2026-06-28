@@ -1,4 +1,6 @@
 from datetime import datetime
+from decimal import Decimal
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -39,3 +41,51 @@ class TickerResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StockQuoteResponse(BaseModel):
+    """A clean stock quote OptionScope sends to the frontend."""
+
+    symbol: str
+    bid_price: Decimal
+    ask_price: Decimal
+    bid_size: int
+    ask_size: int
+    timestamp: datetime
+    feed: str
+    provider: str = "alpaca"
+    data_notice: str = (
+        "IEX market-data feed. Informational only; not for trade execution."
+    )
+
+
+class StockMarketSnapshotResponse(BaseModel):
+    """A fuller market summary for one stock symbol."""
+
+    symbol: str
+
+    last_trade_price: Optional[Decimal]
+    last_trade_timestamp: Optional[datetime]
+
+    bid_price: Optional[Decimal]
+    ask_price: Optional[Decimal]
+    bid_size: Optional[int]
+    ask_size: Optional[int]
+    quote_timestamp: Optional[datetime]
+
+    day_open: Optional[Decimal]
+    day_high: Optional[Decimal]
+    day_low: Optional[Decimal]
+    day_close: Optional[Decimal]
+    day_volume: Optional[int]
+
+    previous_close: Optional[Decimal]
+    day_change: Optional[Decimal]
+    day_change_percent: Optional[Decimal]
+
+    feed: str
+    provider: str = "alpaca"
+    data_notice: str = (
+        "IEX market-data feed. The latest available data may be stale when "
+        "the market is closed. Informational only; not for trade execution."
+    )
