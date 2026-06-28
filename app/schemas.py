@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -88,4 +88,21 @@ class StockMarketSnapshotResponse(BaseModel):
     data_notice: str = (
         "IEX market-data feed. The latest available data may be stale when "
         "the market is closed. Informational only; not for trade execution."
+    )
+
+
+class OptionExpirationsResponse(BaseModel):
+    """A clean list of option expiration dates for one stock."""
+
+    symbol: str
+    expiration_dates: list[date]
+    dates_returned: int
+    catalog_pages_checked: int
+    catalog_scan_incomplete: bool
+    window_start: date
+    window_end: date
+    provider: str = "alpaca"
+    data_notice: str = (
+        "Option-contract catalog data. Option quotes and Greeks will be "
+        "loaded separately and labeled with their market-data feed."
     )

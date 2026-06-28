@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -226,25 +227,97 @@ def get_stock_market_snapshot(
 
     return schemas.StockMarketSnapshotResponse(
         symbol=normalized_symbol,
-
         last_trade_price=to_decimal_or_none(latest_trade.get("p")),
         last_trade_timestamp=latest_trade.get("t"),
-
         bid_price=to_decimal_or_none(latest_quote.get("bp")),
         ask_price=to_decimal_or_none(latest_quote.get("ap")),
         bid_size=latest_quote.get("bs"),
         ask_size=latest_quote.get("as"),
         quote_timestamp=latest_quote.get("t"),
-
         day_open=to_decimal_or_none(daily_bar.get("o")),
         day_high=to_decimal_or_none(daily_bar.get("h")),
         day_low=to_decimal_or_none(daily_bar.get("l")),
         day_close=day_close,
         day_volume=daily_bar.get("v"),
-
         previous_close=previous_close,
         day_change=day_change,
         day_change_percent=day_change_percent,
-
         feed=alpaca.stock_feed,
+    )
+
+
+@app.get(
+    "/market/options/{symbol}/expirations",
+    response_model=schemas.OptionExpirationsResponse,
+)
+def get_option_expirations(
+    symbol: str,
+    days_ahead: int = Query(
+        default=365,
+        ge=7,
+        le=730,
+        description="How far ahead to search for active option expirations.",
+    ),
+) -> schemas.OptionExpirationsResponse:
+    """Return unique active option expiration dates for one ticker."""
+
+    normalized_symbol = symbol.strip().upper()
+
+    window_start = date.today()
+    window_end = window_start + timedelta(days=days_ahead)
+
+    alpaca = AlpacaClient()
+
+    expiration_dates: set[date] = set()
+    page_token: Optional[str] = None
+    pages_checked = 0
+    max_pages = 5
+
+    for _ in range(max_pages):
+        payload = alpaca.get_option_contract_page(
+            symbol=normalized_symbol,
+            start_date=window_start,
+            end_date=window_end,
+            page_token=page_token,
+        )
+
+        pages_checked += 1
+
+        for contract in payload.get("option_contracts", []):
+            expiration_value = contract.get("expiration_date")
+
+            if not isinstance(expiration_value, str):
+                continue
+
+            try:
+                expiration_dates.add(
+                    date.fromisoformat(expiration_value)
+                )
+            except ValueError:
+                continue
+
+        page_token = payload.get("next_page_token")
+
+        if not page_token:
+            break
+
+    sorted_expirations = sorted(expiration_dates)
+
+    if not sorted_expirations:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Alpaca did not return active option expirations "
+                f"for '{normalized_symbol}'."
+            ),
+        )
+
+    return schemas.OptionExpirationsResponse(
+        symbol=normalized_symbol,
+        expiration_dates=sorted_expirations,
+        dates_returned=len(sorted_expirations),
+        catalog_pages_checked=pages_checked,
+        catalog_scan_incomplete=page_token is not None,
+        window_start=window_start,
+        window_end=window_end,
     )

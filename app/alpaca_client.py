@@ -1,5 +1,6 @@
 import os
-from typing import Any
+from datetime import date
+from typing import Any, Optional
 
 import httpx
 from fastapi import HTTPException, status
@@ -9,9 +10,14 @@ class AlpacaClient:
     """Small helper responsible for safely requesting Alpaca market data."""
 
     def __init__(self) -> None:
-        self.base_url = os.getenv(
+        self.data_base_url = os.getenv(
             "ALPACA_DATA_BASE_URL",
             "https://data.alpaca.markets",
+        ).rstrip("/")
+
+        self.trading_base_url = os.getenv(
+            "ALPACA_TRADING_BASE_URL",
+            "https://paper-api.alpaca.markets",
         ).rstrip("/")
 
         self.api_key = os.getenv("ALPACA_API_KEY")
@@ -35,19 +41,20 @@ class AlpacaClient:
             "APCA-API-SECRET-KEY": self.secret_key,
         }
 
-    def _get(
+    def _get_json(
         self,
+        base_url: str,
         path: str,
         params: dict[str, str],
     ) -> dict[str, Any]:
-        """Make one safe GET request to Alpaca."""
+        """Make one safe GET request to an Alpaca API."""
 
         try:
             response = httpx.get(
-                f"{self.base_url}{path}",
+                f"{base_url}{path}",
                 headers=self._headers(),
                 params=params,
-                timeout=10.0,
+                timeout=15.0,
             )
         except httpx.RequestError:
             raise HTTPException(
@@ -88,9 +95,7 @@ class AlpacaClient:
         if response.is_error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    "Alpaca could not provide market data right now."
-                ),
+                detail="Alpaca could not provide market data right now.",
             )
 
         try:
@@ -106,7 +111,8 @@ class AlpacaClient:
 
         normalized_symbol = symbol.strip().upper()
 
-        payload = self._get(
+        payload = self._get_json(
+            self.data_base_url,
             "/v2/stocks/quotes/latest",
             params={
                 "symbols": normalized_symbol,
@@ -127,13 +133,42 @@ class AlpacaClient:
         return quote
 
     def get_stock_snapshot(self, symbol: str) -> dict[str, Any]:
-        """Ask Alpaca for the full market snapshot for one stock."""
+        """Ask Alpaca for the fuller market snapshot for one stock."""
 
         normalized_symbol = symbol.strip().upper()
 
-        return self._get(
+        return self._get_json(
+            self.data_base_url,
             f"/v2/stocks/{normalized_symbol}/snapshot",
             params={
                 "feed": self.stock_feed,
             },
+        )
+
+    def get_option_contract_page(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        page_token: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get one page of active option contracts for a stock symbol."""
+
+        normalized_symbol = symbol.strip().upper()
+
+        params = {
+            "underlying_symbols": normalized_symbol,
+            "status": "active",
+            "expiration_date_gte": start_date.isoformat(),
+            "expiration_date_lte": end_date.isoformat(),
+            "limit": "1000",
+        }
+
+        if page_token:
+            params["page_token"] = page_token
+
+        return self._get_json(
+            self.trading_base_url,
+            "/v2/options/contracts",
+            params=params,
         )
