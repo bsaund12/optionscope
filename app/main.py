@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.alpaca_client import AlpacaClient
 from app.database import Base, database_is_available, engine, get_db
+from app.validation import normalize_ticker_symbol_for_api
 
 
 @asynccontextmanager
@@ -37,7 +38,7 @@ def find_ticker_or_404(
 ) -> models.Ticker:
     """Find one ticker card or explain that it does not exist."""
 
-    normalized_symbol = symbol.strip().upper()
+    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
 
     ticker = database.scalar(
         select(models.Ticker).where(
@@ -177,7 +178,7 @@ def get_ticker(
 def get_stock_quote(symbol: str) -> schemas.StockQuoteResponse:
     """Get the latest available Alpaca stock quote for one ticker."""
 
-    normalized_symbol = symbol.strip().upper()
+    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
 
     alpaca = AlpacaClient()
     quote = alpaca.get_latest_stock_quote(normalized_symbol)
@@ -202,7 +203,7 @@ def get_stock_market_snapshot(
 ) -> schemas.StockMarketSnapshotResponse:
     """Get a fuller Alpaca market snapshot for one ticker."""
 
-    normalized_symbol = symbol.strip().upper()
+    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
 
     alpaca = AlpacaClient()
     snapshot = alpaca.get_stock_snapshot(normalized_symbol)
@@ -261,7 +262,7 @@ def get_option_expirations(
 ) -> schemas.OptionExpirationsResponse:
     """Return unique active option expiration dates for one ticker."""
 
-    normalized_symbol = symbol.strip().upper()
+    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
 
     window_start = date.today()
     window_end = window_start + timedelta(days=days_ahead)

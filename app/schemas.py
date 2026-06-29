@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.validation import normalize_ticker_symbol
+
 
 class TickerCreate(BaseModel):
     """The information OptionScope needs when adding a ticker."""
@@ -23,7 +25,7 @@ class TickerCreate(BaseModel):
     @field_validator("symbol")
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
-        return value.strip().upper()
+        return normalize_ticker_symbol(value)
 
     @field_validator("company_name")
     @classmethod
