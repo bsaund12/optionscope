@@ -7,6 +7,7 @@ from app.option_chain import (
     MAX_CHAIN_RESULT_LIMIT,
     contract_matches_chain_request,
     normalize_option_chain_snapshot,
+    normalize_chain_snapshot_mapping,
     normalize_option_type,
     parse_occ_option_symbol,
     validate_chain_limit,
@@ -231,3 +232,77 @@ def test_normalize_option_chain_snapshot_keeps_bad_provider_values_empty() -> No
     assert option_card.ask_price is None
     assert option_card.implied_volatility is None
     assert option_card.delta is None
+
+def test_normalize_chain_snapshot_mapping_filters_bad_provider_contracts() -> None:
+    raw_snapshots = {
+        "TSM260717C00400000": {
+            "latestQuote": {
+                "bp": 20.10,
+                "ap": 20.50,
+            },
+        },
+        "TSM260717C00450000": {
+            "latestQuote": {
+                "bp": 8.20,
+                "ap": 8.60,
+            },
+        },
+        "NVDA260717C00400000": {},
+        "TSM260717P00400000": {},
+        "NOT-A-REAL-CONTRACT": {},
+        "TSM260717C00475000": "not-a-snapshot",
+    }
+
+    option_cards, skipped_contracts, truncated = (
+        normalize_chain_snapshot_mapping(
+            raw_snapshots,
+            underlying_symbol="tsm",
+            expiration_date=date(2026, 7, 17),
+            option_type="call",
+            limit=10,
+        )
+    )
+
+    assert len(option_cards) == 2
+    assert option_cards[0].strike_price == Decimal("400")
+    assert option_cards[1].strike_price == Decimal("450")
+
+    assert skipped_contracts == 4
+    assert truncated is False
+
+
+def test_normalize_chain_snapshot_mapping_applies_strike_filters_and_limit() -> None:
+    raw_snapshots = {
+        "TSM260717C00400000": {},
+        "TSM260717C00450000": {},
+        "TSM260717C00500000": {},
+    }
+
+    option_cards, skipped_contracts, truncated = (
+        normalize_chain_snapshot_mapping(
+            raw_snapshots,
+            underlying_symbol="TSM",
+            expiration_date=date(2026, 7, 17),
+            option_type="call",
+            limit=1,
+            minimum_strike=Decimal("425"),
+            maximum_strike=Decimal("500"),
+        )
+    )
+
+    assert len(option_cards) == 1
+    assert option_cards[0].strike_price == Decimal("450")
+
+    assert skipped_contracts == 1
+    assert truncated is True
+
+
+def test_normalize_chain_snapshot_mapping_rejects_all_as_one_side() -> None:
+    with pytest.raises(ValueError):
+        normalize_chain_snapshot_mapping(
+            {},
+            underlying_symbol="TSM",
+            expiration_date=date(2026, 7, 17),
+            option_type="all",  # type: ignore[arg-type]
+            limit=10,
+        )

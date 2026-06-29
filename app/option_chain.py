@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Mapping, Optional
+from app.validation import normalize_ticker_symbol, validate_strike_range
 
 
 MAX_CHAIN_RESULT_LIMIT = 100
@@ -271,4 +272,102 @@ def normalize_option_chain_snapshot(
         theta=to_decimal_or_none(greeks.get("theta")),
         vega=to_decimal_or_none(greeks.get("vega")),
         rho=to_decimal_or_none(greeks.get("rho")),
+    )
+
+def normalize_chain_snapshot_mapping(
+    raw_snapshots: Mapping[str, Any],
+    *,
+    underlying_symbol: str,
+    expiration_date: date,
+    option_type: Literal["call", "put"],
+    limit: int,
+    minimum_strike: Optional[Decimal] = None,
+    maximum_strike: Optional[Decimal] = None,
+) -> tuple[list[NormalizedOptionChainContract], int, bool]:
+    """
+    Inspect and normalize raw provider contracts before returning them.
+
+    Returns:
+    - clean option cards
+    - number of contracts skipped as invalid or mismatched
+    - whether OptionScope applied its own result cap
+    """
+
+    if option_type not in {"call", "put"}:
+        raise ValueError(
+            "Option type must be 'call' or 'put' for one chain side."
+        )
+
+    normalized_underlying_symbol = normalize_ticker_symbol(
+        underlying_symbol
+    )
+
+    minimum_strike, maximum_strike = validate_strike_range(
+        minimum_strike,
+        maximum_strike,
+    )
+
+    safe_limit = validate_chain_limit(limit)
+
+    option_cards: list[NormalizedOptionChainContract] = []
+    skipped_contracts = 0
+
+    for raw_contract_symbol, raw_snapshot in raw_snapshots.items():
+        if not isinstance(raw_contract_symbol, str):
+            skipped_contracts += 1
+            continue
+
+        if not isinstance(raw_snapshot, Mapping):
+            skipped_contracts += 1
+            continue
+
+        try:
+            contract = parse_occ_option_symbol(raw_contract_symbol)
+        except ValueError:
+            skipped_contracts += 1
+            continue
+
+        if not contract_matches_chain_request(
+            contract,
+            underlying_symbol=normalized_underlying_symbol,
+            expiration_date=expiration_date,
+            option_type=option_type,
+        ):
+            skipped_contracts += 1
+            continue
+
+        if (
+            minimum_strike is not None
+            and contract.strike_price < minimum_strike
+        ):
+            skipped_contracts += 1
+            continue
+
+        if (
+            maximum_strike is not None
+            and contract.strike_price > maximum_strike
+        ):
+            skipped_contracts += 1
+            continue
+
+        option_cards.append(
+            normalize_option_chain_snapshot(
+                contract,
+                raw_snapshot,
+            )
+        )
+
+    option_cards.sort(
+        key=lambda option_card: (
+            option_card.strike_price,
+            option_card.contract_symbol,
+        )
+    )
+
+    truncated_by_optionscope = len(option_cards) > safe_limit
+
+    return (
+        option_cards[:safe_limit],
+        skipped_contracts,
+        truncated_by_optionscope,
     )

@@ -1,6 +1,7 @@
 import os
 from datetime import date
-from typing import Any, Optional
+from decimal import Decimal
+from typing import Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException, status
@@ -22,7 +23,12 @@ class AlpacaClient:
 
         self.api_key = os.getenv("ALPACA_API_KEY")
         self.secret_key = os.getenv("ALPACA_SECRET_KEY")
+
         self.stock_feed = os.getenv("ALPACA_STOCK_FEED", "iex")
+        self.options_feed = os.getenv(
+            "ALPACA_OPTIONS_FEED",
+            "indicative",
+        )
 
     def _headers(self) -> dict[str, str]:
         """Build the private authentication headers Alpaca requires."""
@@ -81,6 +87,12 @@ class AlpacaClient:
                     "Your Alpaca account does not have access to this "
                     "market-data request."
                 ),
+            )
+
+        if response.status_code == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Alpaca did not find the requested market data.",
             )
 
         if response.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
@@ -170,5 +182,49 @@ class AlpacaClient:
         return self._get_json(
             self.trading_base_url,
             "/v2/options/contracts",
+            params=params,
+        )
+
+    def get_option_chain_page(
+        self,
+        symbol: str,
+        expiration_date: date,
+        option_type: Literal["call", "put"],
+        limit: int,
+        minimum_strike: Optional[Decimal] = None,
+        maximum_strike: Optional[Decimal] = None,
+    ) -> dict[str, Any]:
+        """
+        Get one tightly filtered page of option snapshots.
+
+        This method intentionally accepts only OptionScope-approved
+        filters. It does not expose provider URLs, feeds, or page tokens
+        to a browser user.
+        """
+
+        if option_type not in {"call", "put"}:
+            raise ValueError("Option type must be 'call' or 'put'.")
+
+        if limit < 1 or limit > 100:
+            raise ValueError("Option-chain limit must be between 1 and 100.")
+
+        normalized_symbol = symbol.strip().upper()
+
+        params = {
+            "feed": self.options_feed,
+            "expiration_date": expiration_date.isoformat(),
+            "type": option_type,
+            "limit": str(limit),
+        }
+
+        if minimum_strike is not None:
+            params["strike_price_gte"] = str(minimum_strike)
+
+        if maximum_strike is not None:
+            params["strike_price_lte"] = str(maximum_strike)
+
+        return self._get_json(
+            self.data_base_url,
+            f"/v1beta1/options/snapshots/{normalized_symbol}",
             params=params,
         )
