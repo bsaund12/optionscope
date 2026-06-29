@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Optional
+from typing import Any, Literal, Mapping, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from sqlalchemy import select
@@ -11,7 +11,19 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.alpaca_client import AlpacaClient
 from app.database import Base, database_is_available, engine, get_db
-from app.validation import normalize_ticker_symbol_for_api
+
+from app.validation import (
+    normalize_ticker_symbol_for_api,
+    validate_expiration_date,
+    validate_strike_range,
+)
+
+from app.option_chain import (
+    NormalizedOptionChainContract,
+    normalize_chain_snapshot_mapping,
+    normalize_option_type,
+    validate_chain_limit,
+)
 
 
 @asynccontextmanager
@@ -321,4 +333,210 @@ def get_option_expirations(
         catalog_scan_incomplete=page_token is not None,
         window_start=window_start,
         window_end=window_end,
+    )
+
+
+def option_card_to_response(
+    option_card: NormalizedOptionChainContract,
+) -> schemas.OptionChainContractResponse:
+    """Turn one validated internal option card into an API response card."""
+
+    return schemas.OptionChainContractResponse(
+        contract_symbol=option_card.contract_symbol,
+        underlying_symbol=option_card.underlying_symbol,
+        expiration_date=option_card.expiration_date,
+        option_type=option_card.option_type,
+        strike_price=option_card.strike_price,
+        last_trade_price=option_card.last_trade_price,
+        last_trade_size=option_card.last_trade_size,
+        last_trade_timestamp=option_card.last_trade_timestamp,
+        bid_price=option_card.bid_price,
+        ask_price=option_card.ask_price,
+        bid_size=option_card.bid_size,
+        ask_size=option_card.ask_size,
+        quote_timestamp=option_card.quote_timestamp,
+        implied_volatility=option_card.implied_volatility,
+        delta=option_card.delta,
+        gamma=option_card.gamma,
+        theta=option_card.theta,
+        vega=option_card.vega,
+        rho=option_card.rho,
+    )
+
+
+def empty_option_chain_side(
+    option_type: Literal["call", "put"],
+) -> schemas.OptionChainSideResponse:
+    """Return an empty side when the user did not ask for it."""
+
+    return schemas.OptionChainSideResponse(
+        requested=False,
+        option_type=option_type,
+        contracts=[],
+        contracts_returned=0,
+        skipped_provider_contracts=0,
+        provider_more_available=False,
+        optionscope_truncated=False,
+    )
+
+
+def load_option_chain_side(
+    alpaca: AlpacaClient,
+    *,
+    symbol: str,
+    expiration_date: date,
+    option_type: Literal["call", "put"],
+    minimum_strike: Optional[Decimal],
+    maximum_strike: Optional[Decimal],
+    limit: int,
+) -> schemas.OptionChainSideResponse:
+    """Load, inspect, and clean one side of an option chain."""
+
+    payload = alpaca.get_option_chain_page(
+        symbol=symbol,
+        expiration_date=expiration_date,
+        option_type=option_type,
+        limit=limit,
+        minimum_strike=minimum_strike,
+        maximum_strike=maximum_strike,
+    )
+
+    raw_snapshots = payload.get("snapshots", {})
+
+    if not isinstance(raw_snapshots, Mapping):
+        raw_snapshots = {}
+
+    option_cards, skipped_contracts, optionscope_truncated = (
+        normalize_chain_snapshot_mapping(
+            raw_snapshots,
+            underlying_symbol=symbol,
+            expiration_date=expiration_date,
+            option_type=option_type,
+            limit=limit,
+            minimum_strike=minimum_strike,
+            maximum_strike=maximum_strike,
+        )
+    )
+
+    return schemas.OptionChainSideResponse(
+        requested=True,
+        option_type=option_type,
+        contracts=[
+            option_card_to_response(option_card)
+            for option_card in option_cards
+        ],
+        contracts_returned=len(option_cards),
+        skipped_provider_contracts=skipped_contracts,
+        provider_more_available=bool(
+            payload.get("next_page_token")
+        ),
+        optionscope_truncated=optionscope_truncated,
+    )
+
+
+@app.get(
+    "/market/options/{symbol}/chain",
+    response_model=schemas.OptionChainResponse,
+)
+def get_option_chain(
+    symbol: str,
+    expiration_date: date = Query(
+        ...,
+        description="Required option expiration date in YYYY-MM-DD format.",
+    ),
+    option_type: Literal["call", "put", "all"] = Query(
+        default="all",
+        description="Return calls, puts, or both.",
+    ),
+    minimum_strike: Optional[Decimal] = Query(
+        default=None,
+        gt=0,
+        description="Optional minimum strike price.",
+    ),
+    maximum_strike: Optional[Decimal] = Query(
+        default=None,
+        gt=0,
+        description="Optional maximum strike price.",
+    ),
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Maximum contracts returned per requested side.",
+    ),
+) -> schemas.OptionChainResponse:
+    """
+    Return a validated, limited option chain for one ticker and expiration.
+
+    The route never exposes Alpaca credentials, provider URLs, or page tokens.
+    """
+
+    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
+
+    try:
+        safe_expiration_date = validate_expiration_date(
+            expiration_date
+        )
+
+        safe_option_type = normalize_option_type(option_type)
+
+        safe_minimum_strike, safe_maximum_strike = (
+            validate_strike_range(
+                minimum_strike,
+                maximum_strike,
+            )
+        )
+
+        safe_limit = validate_chain_limit(limit)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    alpaca = AlpacaClient()
+
+    calls = empty_option_chain_side("call")
+    puts = empty_option_chain_side("put")
+
+    if safe_option_type in {"call", "all"}:
+        calls = load_option_chain_side(
+            alpaca,
+            symbol=normalized_symbol,
+            expiration_date=safe_expiration_date,
+            option_type="call",
+            minimum_strike=safe_minimum_strike,
+            maximum_strike=safe_maximum_strike,
+            limit=safe_limit,
+        )
+
+    if safe_option_type in {"put", "all"}:
+        puts = load_option_chain_side(
+            alpaca,
+            symbol=normalized_symbol,
+            expiration_date=safe_expiration_date,
+            option_type="put",
+            minimum_strike=safe_minimum_strike,
+            maximum_strike=safe_maximum_strike,
+            limit=safe_limit,
+        )
+
+    response_may_be_incomplete = (
+        calls.provider_more_available
+        or puts.provider_more_available
+        or calls.optionscope_truncated
+        or puts.optionscope_truncated
+    )
+
+    return schemas.OptionChainResponse(
+        symbol=normalized_symbol,
+        expiration_date=safe_expiration_date,
+        requested_option_type=safe_option_type,
+        minimum_strike=safe_minimum_strike,
+        maximum_strike=safe_maximum_strike,
+        limit_per_side=safe_limit,
+        calls=calls,
+        puts=puts,
+        response_may_be_incomplete=response_may_be_incomplete,
+        feed=alpaca.options_feed,
     )
