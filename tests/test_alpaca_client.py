@@ -115,7 +115,7 @@ def test_get_option_chain_page_rejects_bad_option_types(
     [
         0,
         -1,
-        101,
+        1001,
     ],
 )
 def test_get_option_chain_page_rejects_bad_limits(

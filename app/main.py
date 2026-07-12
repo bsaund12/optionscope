@@ -10,7 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.alpaca_client import AlpacaClient
+
+from app.alpaca_client import (
+    AlpacaClient,
+    MAX_PROVIDER_OPTION_CHAIN_LIMIT,
+)
+
 from app.database import Base, database_is_available, engine, get_db
 
 from app.validation import (
@@ -23,6 +28,7 @@ from app.option_chain import (
     NormalizedOptionChainContract,
     normalize_chain_snapshot_mapping,
     normalize_option_type,
+    select_contracts_nearest_to_reference_price,
     validate_chain_limit,
 )
 
@@ -102,6 +108,46 @@ def round_money_or_none(value: Optional[Decimal]) -> Optional[Decimal]:
     return value.quantize(
         Decimal("0.0001"),
         rounding=ROUND_HALF_UP,
+    )
+
+def get_reference_price_or_502(
+    alpaca: AlpacaClient,
+    symbol: str,
+) -> Decimal:
+    """
+    Get a usable underlying price for ATM-centered option selection.
+
+    Prefer the latest trade price. Fall back to the latest daily close
+    when a current trade price is unavailable.
+    """
+
+    snapshot = alpaca.get_stock_snapshot(symbol)
+
+    latest_trade = snapshot.get("latestTrade")
+    daily_bar = snapshot.get("dailyBar")
+
+    possible_prices: list[Optional[Decimal]] = []
+
+    if isinstance(latest_trade, Mapping):
+        possible_prices.append(
+            to_decimal_or_none(latest_trade.get("p"))
+        )
+
+    if isinstance(daily_bar, Mapping):
+        possible_prices.append(
+            to_decimal_or_none(daily_bar.get("c"))
+        )
+
+    for possible_price in possible_prices:
+        if possible_price is not None and possible_price > 0:
+            return possible_price
+
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=(
+            f"OptionScope could not find a usable reference price "
+            f"for '{symbol}'."
+        ),
     )
 
 
@@ -402,15 +448,22 @@ def load_option_chain_side(
     option_type: Literal["call", "put"],
     minimum_strike: Optional[Decimal],
     maximum_strike: Optional[Decimal],
+    reference_price: Decimal,
     limit: int,
 ) -> schemas.OptionChainSideResponse:
-    """Load, inspect, and clean one side of an option chain."""
+    """
+    Load one chain side, validate it, then select strikes nearest ATM.
+
+    The public result limit stays small, but OptionScope inspects a larger
+    bounded provider batch first so it can choose contracts near the live
+    underlying price instead of blindly keeping the lowest strikes.
+    """
 
     payload = alpaca.get_option_chain_page(
         symbol=symbol,
         expiration_date=expiration_date,
         option_type=option_type,
-        limit=limit,
+        limit=MAX_PROVIDER_OPTION_CHAIN_LIMIT,
         minimum_strike=minimum_strike,
         maximum_strike=maximum_strike,
     )
@@ -420,15 +473,23 @@ def load_option_chain_side(
     if not isinstance(raw_snapshots, Mapping):
         raw_snapshots = {}
 
-    option_cards, skipped_contracts, optionscope_truncated = (
+    all_option_cards, skipped_contracts, _ = (
         normalize_chain_snapshot_mapping(
             raw_snapshots,
             underlying_symbol=symbol,
             expiration_date=expiration_date,
             option_type=option_type,
-            limit=limit,
+            limit=None,
             minimum_strike=minimum_strike,
             maximum_strike=maximum_strike,
+        )
+    )
+
+    option_cards, optionscope_truncated = (
+        select_contracts_nearest_to_reference_price(
+            all_option_cards,
+            reference_price=reference_price,
+            limit=limit,
         )
     )
 
@@ -510,6 +571,11 @@ def get_option_chain(
 
     alpaca = AlpacaClient()
 
+    reference_price = get_reference_price_or_502(
+        alpaca,
+        normalized_symbol,
+        )
+
     calls = empty_option_chain_side("call")
     puts = empty_option_chain_side("put")
 
@@ -521,6 +587,7 @@ def get_option_chain(
             option_type="call",
             minimum_strike=safe_minimum_strike,
             maximum_strike=safe_maximum_strike,
+            reference_price=reference_price,
             limit=safe_limit,
         )
 
@@ -532,6 +599,7 @@ def get_option_chain(
             option_type="put",
             minimum_strike=safe_minimum_strike,
             maximum_strike=safe_maximum_strike,
+            reference_price=reference_price,
             limit=safe_limit,
         )
 

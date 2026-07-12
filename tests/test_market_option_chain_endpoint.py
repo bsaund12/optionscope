@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -8,7 +8,24 @@ from fastapi import HTTPException
 import app.main as main
 
 
-def test_get_option_chain_returns_clean_calls_and_puts(
+TEST_EXPIRATION = date.today() + timedelta(days=30)
+
+
+def make_contract_symbol(
+    option_type: str,
+    strike_price: Decimal,
+) -> str:
+    contract_type = "C" if option_type == "call" else "P"
+
+    strike_in_thousandths = int(strike_price * Decimal("1000"))
+
+    return (
+        f"TSM{TEST_EXPIRATION.strftime('%y%m%d')}"
+        f"{contract_type}{strike_in_thousandths:08d}"
+    )
+
+
+def test_get_option_chain_centers_results_near_reference_price(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created_clients = []
@@ -19,6 +36,18 @@ def test_get_option_chain_returns_clean_calls_and_puts(
         def __init__(self) -> None:
             created_clients.append(self)
             self.requests = []
+
+        def get_stock_snapshot(self, symbol: str) -> dict:
+            assert symbol == "TSM"
+
+            return {
+                "latestTrade": {
+                    "p": "431.91",
+                },
+                "dailyBar": {
+                    "c": "430.00",
+                },
+            }
 
         def get_option_chain_page(
             self,
@@ -41,68 +70,80 @@ def test_get_option_chain_returns_clean_calls_and_puts(
                 }
             )
 
-            if option_type == "call":
-                return {
-                    "snapshots": {
-                        "TSM260717C00450000": {
-                            "latestQuote": {
-                                "bp": 10.10,
-                                "ap": 10.50,
-                            },
-                            "impliedVolatility": 0.42,
-                            "greeks": {
-                                "delta": 0.55,
-                                "theta": -0.08,
-                            },
-                        },
-                        "NOT-A-REAL-CONTRACT": {},
+            strikes = [
+                Decimal("400"),
+                Decimal("427.5"),
+                Decimal("430"),
+                Decimal("432.5"),
+                Decimal("435"),
+                Decimal("440"),
+                Decimal("470"),
+            ]
+
+            snapshots = {
+                make_contract_symbol(option_type, strike_price): {
+                    "latestQuote": {
+                        "bp": "10.10",
+                        "ap": "10.50",
                     },
+                }
+                for strike_price in strikes
+            }
+
+            if option_type == "call":
+                snapshots["NOT-A-REAL-CONTRACT"] = {}
+
+                return {
+                    "snapshots": snapshots,
                     "next_page_token": "provider-has-more",
                 }
 
             return {
-                "snapshots": {
-                    "TSM260717P00400000": {
-                        "latestQuote": {
-                            "bp": 7.20,
-                            "ap": 7.60,
-                        },
-                    },
-                },
+                "snapshots": snapshots,
             }
 
     monkeypatch.setattr(main, "AlpacaClient", FakeAlpacaClient)
 
     response = main.get_option_chain(
         symbol=" tsm ",
-        expiration_date=date(2026, 7, 17),
+        expiration_date=TEST_EXPIRATION,
         option_type="all",
         minimum_strike=Decimal("350"),
         maximum_strike=Decimal("500"),
-        limit=10,
+        limit=3,
     )
+
+    expected_strikes = [
+        Decimal("430"),
+        Decimal("432.5"),
+        Decimal("435"),
+    ]
 
     assert response.symbol == "TSM"
-    assert response.expiration_date == date(2026, 7, 17)
     assert response.feed == "indicative"
 
-    assert response.calls.requested is True
-    assert response.calls.contracts_returned == 1
-    assert response.calls.contracts[0].contract_symbol == (
-        "TSM260717C00450000"
-    )
-    assert response.calls.contracts[0].strike_price == Decimal("450")
-    assert response.calls.skipped_provider_contracts == 1
-    assert response.calls.provider_more_available is True
+    assert [
+        contract.strike_price
+        for contract in response.calls.contracts
+    ] == expected_strikes
 
-    assert response.puts.requested is True
-    assert response.puts.contracts_returned == 1
-    assert response.puts.contracts[0].option_type == "put"
+    assert [
+        contract.strike_price
+        for contract in response.puts.contracts
+    ] == expected_strikes
+
+    assert response.calls.skipped_provider_contracts == 1
+    assert response.calls.optionscope_truncated is True
+    assert response.calls.provider_more_available is True
 
     assert response.response_may_be_incomplete is True
 
     assert len(created_clients) == 1
-    assert len(created_clients[0].requests) == 2
+
+    assert [
+        request["limit"]
+        for request in created_clients[0].requests
+    ] == [1000, 1000]
 
 
 def test_get_option_chain_requests_only_calls_when_requested(
@@ -112,6 +153,13 @@ def test_get_option_chain_requests_only_calls_when_requested(
 
     class FakeAlpacaClient:
         options_feed = "indicative"
+
+        def get_stock_snapshot(self, symbol: str) -> dict:
+            return {
+                "latestTrade": {
+                    "p": "431.91",
+                },
+            }
 
         def get_option_chain_page(
             self,
@@ -133,7 +181,7 @@ def test_get_option_chain_requests_only_calls_when_requested(
 
     response = main.get_option_chain(
         symbol="TSM",
-        expiration_date=date(2026, 7, 17),
+        expiration_date=TEST_EXPIRATION,
         option_type="call",
         minimum_strike=None,
         maximum_strike=None,
@@ -149,7 +197,7 @@ def test_get_option_chain_rejects_a_past_expiration_date() -> None:
     with pytest.raises(HTTPException) as error:
         main.get_option_chain(
             symbol="TSM",
-            expiration_date=date(2020, 1, 1),
+            expiration_date=date.today() - timedelta(days=1),
             option_type="call",
             minimum_strike=None,
             maximum_strike=None,
@@ -163,7 +211,7 @@ def test_get_option_chain_rejects_a_bad_option_type() -> None:
     with pytest.raises(HTTPException) as error:
         main.get_option_chain(
             symbol="TSM",
-            expiration_date=date(2026, 7, 17),
+            expiration_date=TEST_EXPIRATION,
             option_type="buy",  # type: ignore[arg-type]
             minimum_strike=None,
             maximum_strike=None,

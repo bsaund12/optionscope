@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Mapping, Optional
+
 from app.validation import normalize_ticker_symbol, validate_strike_range
 
 
@@ -184,6 +185,8 @@ def parse_occ_option_symbol(contract_symbol: str) -> ParsedOptionContract:
     else:
         option_type = "put"
 
+    # OCC strike values are stored in thousandths.
+    # Example: 00450000 becomes $450.000.
     strike_price = Decimal(strike_text) / Decimal("1000")
 
     return ParsedOptionContract(
@@ -252,21 +255,17 @@ def normalize_option_chain_snapshot(
         expiration_date=contract.expiration_date,
         option_type=contract.option_type,
         strike_price=contract.strike_price,
-
         last_trade_price=to_decimal_or_none(latest_trade.get("p")),
         last_trade_size=to_int_or_none(latest_trade.get("s")),
         last_trade_timestamp=to_datetime_or_none(latest_trade.get("t")),
-
         bid_price=to_decimal_or_none(latest_quote.get("bp")),
         ask_price=to_decimal_or_none(latest_quote.get("ap")),
         bid_size=to_int_or_none(latest_quote.get("bs")),
         ask_size=to_int_or_none(latest_quote.get("as")),
         quote_timestamp=to_datetime_or_none(latest_quote.get("t")),
-
         implied_volatility=to_decimal_or_none(
             raw_snapshot.get("impliedVolatility")
         ),
-
         delta=to_decimal_or_none(greeks.get("delta")),
         gamma=to_decimal_or_none(greeks.get("gamma")),
         theta=to_decimal_or_none(greeks.get("theta")),
@@ -274,18 +273,23 @@ def normalize_option_chain_snapshot(
         rho=to_decimal_or_none(greeks.get("rho")),
     )
 
+
 def normalize_chain_snapshot_mapping(
     raw_snapshots: Mapping[str, Any],
     *,
     underlying_symbol: str,
     expiration_date: date,
     option_type: Literal["call", "put"],
-    limit: int,
+    limit: Optional[int] = None,
     minimum_strike: Optional[Decimal] = None,
     maximum_strike: Optional[Decimal] = None,
 ) -> tuple[list[NormalizedOptionChainContract], int, bool]:
     """
     Inspect and normalize raw provider contracts before returning them.
+
+    When limit is provided, OptionScope applies that result cap.
+    When limit is None, this returns every valid contract so another
+    trusted backend step can select contracts nearest to a live price.
 
     Returns:
     - clean option cards
@@ -307,7 +311,10 @@ def normalize_chain_snapshot_mapping(
         maximum_strike,
     )
 
-    safe_limit = validate_chain_limit(limit)
+    safe_limit: Optional[int] = None
+
+    if limit is not None:
+        safe_limit = validate_chain_limit(limit)
 
     option_cards: list[NormalizedOptionChainContract] = []
     skipped_contracts = 0
@@ -364,10 +371,64 @@ def normalize_chain_snapshot_mapping(
         )
     )
 
+    if safe_limit is None:
+        return (
+            option_cards,
+            skipped_contracts,
+            False,
+        )
+
     truncated_by_optionscope = len(option_cards) > safe_limit
 
     return (
         option_cards[:safe_limit],
         skipped_contracts,
         truncated_by_optionscope,
+    )
+
+
+def select_contracts_nearest_to_reference_price(
+    option_cards: list[NormalizedOptionChainContract],
+    *,
+    reference_price: Optional[Decimal],
+    limit: int,
+) -> tuple[list[NormalizedOptionChainContract], bool]:
+    """
+    Keep contracts closest to a live underlying reference price.
+
+    The selected contracts are sorted by strike afterward so the chain
+    remains easy to read from low strike to high strike.
+    """
+
+    safe_limit = validate_chain_limit(limit)
+
+    if reference_price is None or reference_price <= 0:
+        selected_cards = option_cards[:safe_limit]
+
+        return (
+            selected_cards,
+            len(option_cards) > safe_limit,
+        )
+
+    ranked_cards = sorted(
+        option_cards,
+        key=lambda option_card: (
+            abs(option_card.strike_price - reference_price),
+            option_card.strike_price,
+            option_card.contract_symbol,
+        ),
+    )
+
+    selected_cards = ranked_cards[:safe_limit]
+
+    selected_cards.sort(
+        key=lambda option_card: (
+            option_card.strike_price,
+            option_card.contract_symbol,
+        )
+    )
+
+    return (
+        selected_cards,
+        len(option_cards) > safe_limit,
     )
