@@ -1,15 +1,24 @@
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Mapping, Optional
 
-from app.validation import normalize_ticker_symbol, validate_strike_range
+from app.validation import (
+    normalize_ticker_symbol,
+    validate_strike_range,
+)
 
 
 MAX_CHAIN_RESULT_LIMIT = 100
 
-OptionType = Literal["call", "put", "all"]
+OptionType = Literal[
+    "call",
+    "put",
+    "all",
+]
 
 OCC_OPTION_SYMBOL_PATTERN = re.compile(
     r"^(?P<root>[A-Z0-9.\-]+)"
@@ -26,7 +35,10 @@ class ParsedOptionContract:
     contract_symbol: str
     underlying_symbol: str
     expiration_date: date
-    option_type: Literal["call", "put"]
+    option_type: Literal[
+        "call",
+        "put",
+    ]
     strike_price: Decimal
 
 
@@ -41,7 +53,10 @@ class NormalizedOptionChainContract:
     contract_symbol: str
     underlying_symbol: str
     expiration_date: date
-    option_type: Literal["call", "put"]
+    option_type: Literal[
+        "call",
+        "put",
+    ]
     strike_price: Decimal
 
     last_trade_price: Optional[Decimal]
@@ -63,11 +78,15 @@ class NormalizedOptionChainContract:
     rho: Optional[Decimal]
 
 
-def normalize_option_type(value: str) -> OptionType:
+def normalize_option_type(
+    value: str,
+) -> OptionType:
     """Allow only call, put, or all for OptionScope chain requests."""
 
     if not isinstance(value, str):
-        raise ValueError("Option type must be text.")
+        raise ValueError(
+            "Option type must be text."
+        )
 
     normalized_value = value.strip().lower()
 
@@ -81,15 +100,20 @@ def normalize_option_type(value: str) -> OptionType:
         return "all"
 
     raise ValueError(
-        "Option type must be 'call', 'put', or 'all'."
+        "Option type must be "
+        "'call', 'put', or 'all'."
     )
 
 
-def validate_chain_limit(value: int) -> int:
+def validate_chain_limit(
+    value: int,
+) -> int:
     """Keep a single OptionScope chain response intentionally small."""
 
     if value < 1:
-        raise ValueError("Result limit must be at least 1.")
+        raise ValueError(
+            "Result limit must be at least 1."
+        )
 
     if value > MAX_CHAIN_RESULT_LIMIT:
         raise ValueError(
@@ -100,7 +124,9 @@ def validate_chain_limit(value: int) -> int:
     return value
 
 
-def to_decimal_or_none(value: Any) -> Optional[Decimal]:
+def to_decimal_or_none(
+    value: Any,
+) -> Optional[Decimal]:
     """Convert a provider number into Decimal without guessing."""
 
     if value is None:
@@ -108,11 +134,16 @@ def to_decimal_or_none(value: Any) -> Optional[Decimal]:
 
     try:
         return Decimal(str(value))
-    except (InvalidOperation, ValueError):
+    except (
+        InvalidOperation,
+        ValueError,
+    ):
         return None
 
 
-def to_int_or_none(value: Any) -> Optional[int]:
+def to_int_or_none(
+    value: Any,
+) -> Optional[int]:
     """Convert a provider whole-number value safely."""
 
     if value is None:
@@ -120,11 +151,16 @@ def to_int_or_none(value: Any) -> Optional[int]:
 
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
 
-def to_datetime_or_none(value: Any) -> Optional[datetime]:
+def to_datetime_or_none(
+    value: Any,
+) -> Optional[datetime]:
     """Convert an ISO timestamp safely, or return None if it is invalid."""
 
     if not isinstance(value, str):
@@ -137,13 +173,18 @@ def to_datetime_or_none(value: Any) -> Optional[datetime]:
 
     try:
         return datetime.fromisoformat(
-            cleaned_value.replace("Z", "+00:00")
+            cleaned_value.replace(
+                "Z",
+                "+00:00",
+            )
         )
     except ValueError:
         return None
 
 
-def parse_occ_option_symbol(contract_symbol: str) -> ParsedOptionContract:
+def parse_occ_option_symbol(
+    contract_symbol: str,
+) -> ParsedOptionContract:
     """
     Parse an OCC-style option contract symbol.
 
@@ -153,32 +194,54 @@ def parse_occ_option_symbol(contract_symbol: str) -> ParsedOptionContract:
       root  date  type   strike
     """
 
-    normalized_symbol = contract_symbol.strip().upper()
+    normalized_symbol = (
+        contract_symbol.strip().upper()
+    )
 
-    match = OCC_OPTION_SYMBOL_PATTERN.fullmatch(normalized_symbol)
+    match = OCC_OPTION_SYMBOL_PATTERN.fullmatch(
+        normalized_symbol
+    )
 
     if match is None:
         raise ValueError(
-            f"Unsupported option contract symbol: '{contract_symbol}'."
+            f"Unsupported option contract symbol: "
+            f"'{contract_symbol}'."
         )
 
-    expiration_text = match.group("expiration")
-    strike_text = match.group("strike")
-    contract_type = match.group("contract_type")
+    expiration_text = match.group(
+        "expiration"
+    )
+    strike_text = match.group(
+        "strike"
+    )
+    contract_type = match.group(
+        "contract_type"
+    )
 
     try:
         expiration_date = date(
-            year=2000 + int(expiration_text[0:2]),
-            month=int(expiration_text[2:4]),
-            day=int(expiration_text[4:6]),
+            year=(
+                2000
+                + int(expiration_text[0:2])
+            ),
+            month=int(
+                expiration_text[2:4]
+            ),
+            day=int(
+                expiration_text[4:6]
+            ),
         )
     except ValueError as error:
         raise ValueError(
-            f"Option contract has an invalid expiration date: "
+            f"Option contract has an invalid "
+            f"expiration date: "
             f"'{contract_symbol}'."
         ) from error
 
-    option_type: Literal["call", "put"]
+    option_type: Literal[
+        "call",
+        "put",
+    ]
 
     if contract_type == "C":
         option_type = "call"
@@ -187,11 +250,16 @@ def parse_occ_option_symbol(contract_symbol: str) -> ParsedOptionContract:
 
     # OCC strike values are stored in thousandths.
     # Example: 00450000 becomes $450.000.
-    strike_price = Decimal(strike_text) / Decimal("1000")
+    strike_price = (
+        Decimal(strike_text)
+        / Decimal("1000")
+    )
 
     return ParsedOptionContract(
         contract_symbol=normalized_symbol,
-        underlying_symbol=match.group("root"),
+        underlying_symbol=match.group(
+            "root"
+        ),
         expiration_date=expiration_date,
         option_type=option_type,
         strike_price=strike_price,
@@ -212,78 +280,161 @@ def contract_matches_chain_request(
     expiration date, or option type.
     """
 
-    normalized_underlying_symbol = underlying_symbol.strip().upper()
+    normalized_underlying_symbol = (
+        underlying_symbol.strip().upper()
+    )
 
-    if contract.underlying_symbol != normalized_underlying_symbol:
+    if (
+        contract.underlying_symbol
+        != normalized_underlying_symbol
+    ):
         return False
 
-    if contract.expiration_date != expiration_date:
+    if (
+        contract.expiration_date
+        != expiration_date
+    ):
         return False
 
     if option_type == "all":
         return True
 
-    return contract.option_type == option_type
+    return (
+        contract.option_type
+        == option_type
+    )
 
 
 def normalize_option_chain_snapshot(
     contract: ParsedOptionContract,
-    raw_snapshot: Mapping[str, Any],
+    raw_snapshot: Mapping[
+        str,
+        Any,
+    ],
 ) -> NormalizedOptionChainContract:
     """
     Turn one raw Alpaca contract snapshot into a clean OptionScope card.
     """
 
-    latest_trade = raw_snapshot.get("latestTrade")
+    latest_trade = raw_snapshot.get(
+        "latestTrade"
+    )
 
-    if not isinstance(latest_trade, Mapping):
+    if not isinstance(
+        latest_trade,
+        Mapping,
+    ):
         latest_trade = {}
 
-    latest_quote = raw_snapshot.get("latestQuote")
+    latest_quote = raw_snapshot.get(
+        "latestQuote"
+    )
 
-    if not isinstance(latest_quote, Mapping):
+    if not isinstance(
+        latest_quote,
+        Mapping,
+    ):
         latest_quote = {}
 
-    greeks = raw_snapshot.get("greeks")
+    greeks = raw_snapshot.get(
+        "greeks"
+    )
 
-    if not isinstance(greeks, Mapping):
+    if not isinstance(
+        greeks,
+        Mapping,
+    ):
         greeks = {}
 
     return NormalizedOptionChainContract(
-        contract_symbol=contract.contract_symbol,
-        underlying_symbol=contract.underlying_symbol,
-        expiration_date=contract.expiration_date,
+        contract_symbol=(
+            contract.contract_symbol
+        ),
+        underlying_symbol=(
+            contract.underlying_symbol
+        ),
+        expiration_date=(
+            contract.expiration_date
+        ),
         option_type=contract.option_type,
         strike_price=contract.strike_price,
-        last_trade_price=to_decimal_or_none(latest_trade.get("p")),
-        last_trade_size=to_int_or_none(latest_trade.get("s")),
-        last_trade_timestamp=to_datetime_or_none(latest_trade.get("t")),
-        bid_price=to_decimal_or_none(latest_quote.get("bp")),
-        ask_price=to_decimal_or_none(latest_quote.get("ap")),
-        bid_size=to_int_or_none(latest_quote.get("bs")),
-        ask_size=to_int_or_none(latest_quote.get("as")),
-        quote_timestamp=to_datetime_or_none(latest_quote.get("t")),
-        implied_volatility=to_decimal_or_none(
-            raw_snapshot.get("impliedVolatility")
+        last_trade_price=to_decimal_or_none(
+            latest_trade.get("p")
         ),
-        delta=to_decimal_or_none(greeks.get("delta")),
-        gamma=to_decimal_or_none(greeks.get("gamma")),
-        theta=to_decimal_or_none(greeks.get("theta")),
-        vega=to_decimal_or_none(greeks.get("vega")),
-        rho=to_decimal_or_none(greeks.get("rho")),
+        last_trade_size=to_int_or_none(
+            latest_trade.get("s")
+        ),
+        last_trade_timestamp=(
+            to_datetime_or_none(
+                latest_trade.get("t")
+            )
+        ),
+        bid_price=to_decimal_or_none(
+            latest_quote.get("bp")
+        ),
+        ask_price=to_decimal_or_none(
+            latest_quote.get("ap")
+        ),
+        bid_size=to_int_or_none(
+            latest_quote.get("bs")
+        ),
+        ask_size=to_int_or_none(
+            latest_quote.get("as")
+        ),
+        quote_timestamp=(
+            to_datetime_or_none(
+                latest_quote.get("t")
+            )
+        ),
+        implied_volatility=(
+            to_decimal_or_none(
+                raw_snapshot.get(
+                    "impliedVolatility"
+                )
+            )
+        ),
+        delta=to_decimal_or_none(
+            greeks.get("delta")
+        ),
+        gamma=to_decimal_or_none(
+            greeks.get("gamma")
+        ),
+        theta=to_decimal_or_none(
+            greeks.get("theta")
+        ),
+        vega=to_decimal_or_none(
+            greeks.get("vega")
+        ),
+        rho=to_decimal_or_none(
+            greeks.get("rho")
+        ),
     )
 
 
 def normalize_chain_snapshot_mapping(
-    raw_snapshots: Mapping[str, Any],
+    raw_snapshots: Mapping[
+        str,
+        Any,
+    ],
     *,
     underlying_symbol: str,
     expiration_date: date,
-    option_type: Literal["call", "put"],
+    option_type: Literal[
+        "call",
+        "put",
+    ],
     limit: Optional[int] = None,
-    minimum_strike: Optional[Decimal] = None,
-    maximum_strike: Optional[Decimal] = None,
-) -> tuple[list[NormalizedOptionChainContract], int, bool]:
+    minimum_strike: Optional[
+        Decimal
+    ] = None,
+    maximum_strike: Optional[
+        Decimal
+    ] = None,
+) -> tuple[
+    list[NormalizedOptionChainContract],
+    int,
+    bool,
+]:
     """
     Inspect and normalize raw provider contracts before returning them.
 
@@ -297,16 +448,26 @@ def normalize_chain_snapshot_mapping(
     - whether OptionScope applied its own result cap
     """
 
-    if option_type not in {"call", "put"}:
+    if option_type not in {
+        "call",
+        "put",
+    }:
         raise ValueError(
-            "Option type must be 'call' or 'put' for one chain side."
+            "Option type must be "
+            "'call' or 'put' "
+            "for one chain side."
         )
 
-    normalized_underlying_symbol = normalize_ticker_symbol(
-        underlying_symbol
+    normalized_underlying_symbol = (
+        normalize_ticker_symbol(
+            underlying_symbol
+        )
     )
 
-    minimum_strike, maximum_strike = validate_strike_range(
+    (
+        minimum_strike,
+        maximum_strike,
+    ) = validate_strike_range(
         minimum_strike,
         maximum_strike,
     )
@@ -314,30 +475,50 @@ def normalize_chain_snapshot_mapping(
     safe_limit: Optional[int] = None
 
     if limit is not None:
-        safe_limit = validate_chain_limit(limit)
+        safe_limit = validate_chain_limit(
+            limit
+        )
 
-    option_cards: list[NormalizedOptionChainContract] = []
+    option_cards: list[
+        NormalizedOptionChainContract
+    ] = []
+
     skipped_contracts = 0
 
-    for raw_contract_symbol, raw_snapshot in raw_snapshots.items():
-        if not isinstance(raw_contract_symbol, str):
+    for (
+        raw_contract_symbol,
+        raw_snapshot,
+    ) in raw_snapshots.items():
+        if not isinstance(
+            raw_contract_symbol,
+            str,
+        ):
             skipped_contracts += 1
             continue
 
-        if not isinstance(raw_snapshot, Mapping):
+        if not isinstance(
+            raw_snapshot,
+            Mapping,
+        ):
             skipped_contracts += 1
             continue
 
         try:
-            contract = parse_occ_option_symbol(raw_contract_symbol)
+            contract = parse_occ_option_symbol(
+                raw_contract_symbol
+            )
         except ValueError:
             skipped_contracts += 1
             continue
 
         if not contract_matches_chain_request(
             contract,
-            underlying_symbol=normalized_underlying_symbol,
-            expiration_date=expiration_date,
+            underlying_symbol=(
+                normalized_underlying_symbol
+            ),
+            expiration_date=(
+                expiration_date
+            ),
             option_type=option_type,
         ):
             skipped_contracts += 1
@@ -345,14 +526,16 @@ def normalize_chain_snapshot_mapping(
 
         if (
             minimum_strike is not None
-            and contract.strike_price < minimum_strike
+            and contract.strike_price
+            < minimum_strike
         ):
             skipped_contracts += 1
             continue
 
         if (
             maximum_strike is not None
-            and contract.strike_price > maximum_strike
+            and contract.strike_price
+            > maximum_strike
         ):
             skipped_contracts += 1
             continue
@@ -378,57 +561,13 @@ def normalize_chain_snapshot_mapping(
             False,
         )
 
-    truncated_by_optionscope = len(option_cards) > safe_limit
+    truncated_by_optionscope = (
+        len(option_cards)
+        > safe_limit
+    )
 
     return (
         option_cards[:safe_limit],
         skipped_contracts,
         truncated_by_optionscope,
-    )
-
-
-def select_contracts_nearest_to_reference_price(
-    option_cards: list[NormalizedOptionChainContract],
-    *,
-    reference_price: Optional[Decimal],
-    limit: int,
-) -> tuple[list[NormalizedOptionChainContract], bool]:
-    """
-    Keep contracts closest to a live underlying reference price.
-
-    The selected contracts are sorted by strike afterward so the chain
-    remains easy to read from low strike to high strike.
-    """
-
-    safe_limit = validate_chain_limit(limit)
-
-    if reference_price is None or reference_price <= 0:
-        selected_cards = option_cards[:safe_limit]
-
-        return (
-            selected_cards,
-            len(option_cards) > safe_limit,
-        )
-
-    ranked_cards = sorted(
-        option_cards,
-        key=lambda option_card: (
-            abs(option_card.strike_price - reference_price),
-            option_card.strike_price,
-            option_card.contract_symbol,
-        ),
-    )
-
-    selected_cards = ranked_cards[:safe_limit]
-
-    selected_cards.sort(
-        key=lambda option_card: (
-            option_card.strike_price,
-            option_card.contract_symbol,
-        )
-    )
-
-    return (
-        selected_cards,
-        len(option_cards) > safe_limit,
     )
