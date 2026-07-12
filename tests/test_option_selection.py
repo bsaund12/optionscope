@@ -7,7 +7,10 @@ from app.option_chain import (
     MAX_CHAIN_RESULT_LIMIT,
     NormalizedOptionChainContract,
 )
-from app.option_selection import select_nearest_option_contracts
+from app.option_selection import (
+    resolve_reference_price_from_snapshot,
+    select_nearest_option_contracts,
+)
 
 
 def make_contract(
@@ -41,6 +44,72 @@ def make_contract(
         vega=None,
         rho=None,
     )
+
+
+def test_resolve_reference_price_prefers_latest_trade() -> None:
+    snapshot = {
+        "latestTrade": {"p": 101.25},
+        "latestQuote": {"bp": 100, "ap": 102},
+        "dailyBar": {"c": 99},
+        "prevDailyBar": {"c": 98},
+    }
+
+    assert resolve_reference_price_from_snapshot(snapshot) == Decimal(
+        "101.25"
+    )
+
+
+def test_resolve_reference_price_uses_quote_midpoint() -> None:
+    snapshot = {
+        "latestTrade": {},
+        "latestQuote": {"bp": 100, "ap": 102},
+        "dailyBar": {"c": 99},
+    }
+
+    assert resolve_reference_price_from_snapshot(snapshot) == Decimal(
+        "101"
+    )
+
+
+def test_resolve_reference_price_uses_daily_close() -> None:
+    snapshot = {
+        "latestTrade": {"p": None},
+        "latestQuote": {"bp": 100, "ap": None},
+        "dailyBar": {"c": 99.5},
+        "prevDailyBar": {"c": 98},
+    }
+
+    assert resolve_reference_price_from_snapshot(snapshot) == Decimal(
+        "99.5"
+    )
+
+
+def test_resolve_reference_price_uses_previous_close() -> None:
+    snapshot = {
+        "latestTrade": {"p": 0},
+        "latestQuote": {"bp": -1, "ap": "bad-data"},
+        "dailyBar": {"c": None},
+        "prevDailyBar": {"c": 98},
+    }
+
+    assert resolve_reference_price_from_snapshot(snapshot) == Decimal(
+        "98"
+    )
+
+
+def test_resolve_reference_price_rejects_unusable_snapshot() -> None:
+    with pytest.raises(
+        ValueError,
+        match="Stock snapshot did not contain a usable reference price.",
+    ):
+        resolve_reference_price_from_snapshot(
+            {
+                "latestTrade": {"p": 0},
+                "latestQuote": {"bp": None, "ap": None},
+                "dailyBar": {"c": "not-a-number"},
+                "prevDailyBar": {},
+            }
+        )
 
 
 def test_select_nearest_option_contracts_returns_closest_strikes() -> None:
