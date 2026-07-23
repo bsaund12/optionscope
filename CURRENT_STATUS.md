@@ -48,10 +48,53 @@ Provider responses are normalized into internal dataclasses and Pydantic schemas
 
 ### Frontend
 
-- Ticker search.
-- Market snapshot display.
-- Calls and puts option-chain table.
-- Moneyness badges.
+The frontend test suite and production build were verified successfully on 2026-07-23.
+
+Test command:
+
+```bash
+cd frontend
+npm test -- --run
+```
+
+Confirmed result:
+
+```text
+Test Files  1 passed (1)
+Tests       5 passed (5)
+Duration    88ms
+```
+
+The current Vitest suite covers five `positionLens.ts` scenarios:
+
+- Long-call payoff using the ask as the debit reference.
+- Short-call payoff using the bid as the credit reference.
+- Long-put payoff limits at expiration.
+- Short-put payoff limits at expiration.
+- Rejection of a position that does not match the selected contract.
+
+Production build command:
+
+```bash
+npm run build
+```
+
+Confirmed result:
+
+```text
+18 modules transformed
+Production build completed successfully in 76ms
+```
+
+Known frontend coverage gaps include:
+
+- `App.tsx` state management.
+- Form handling.
+- API orchestration.
+- Loading states.
+- Error states.
+- Rendering market snapshot and option-chain responses.
+
 - **Position Lens**:
   - Client-side, single-leg payoff estimate.
   - Supports long calls, short calls, long puts, and short puts.
@@ -196,8 +239,7 @@ No CI configuration currently exists. Backend and frontend verification must be 
 
 ## Recommended next tasks
 
-1. Run the frontend Vitest suite and production build, then record the confirmed results in this document.
-2. Commit the staged frontend source, `.gitignore`, and project-status documentation.
-3. Remove the fallback `DATABASE_URL` and require explicit database configuration.
-4. Introduce Alembic and replace startup-driven schema creation with managed migrations.
-5. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
+1. Commit the staged frontend source, `.gitignore`, and project-status documentation.
+2. Remove the fallback `DATABASE_URL` and require explicit database configuration.
+3. Introduce Alembic and replace startup-driven schema creation with managed migrations.
+4. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
