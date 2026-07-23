@@ -113,10 +113,6 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
 
 ## Known issues
 
-- **No database migrations**:
-  - Tables are currently created through `Base.metadata.create_all()` during application startup.
-  - Alembic is not configured.
-  - This conflicts with the project's convention that schema changes should use migrations.
 - **No retry or backoff behavior for Alpaca requests**:
   - A transient provider or network failure immediately fails the user's request.
 - **No caching layer**:
@@ -234,9 +230,11 @@ No CI configuration currently exists. Backend and frontend verification must be 
 - `.env` is ignored by Git.
 - No secrets were found in tracked source files.
 - Frontend dependency directories, build output, and local environment files are excluded from version control.
+- Alembic (`alembic/env.py`) obtains `DATABASE_URL` through the same `require_database_url()` helper the application uses, rather than a connection string in `alembic.ini`, so migrations fail the same way the app does when configuration is missing.
+- Docker Compose's `api` service now runs `alembic upgrade head` before starting Uvicorn, so schema is brought up to date automatically on container startup.
+- The Docker Compose database was already at the baseline schema (created by the old `create_all()` behavior). It was reconciled with a one-time `alembic stamp 4de9997abbde` run in a temporary one-off `api` container, verified with `alembic current`. The existing `tickers` table and its rows were confirmed present and unchanged before and after. Docker Compose was then started normally; `alembic upgrade head` ran on `api` startup, found the database already at head (no `CREATE TABLE` was issued), and `/health` returned `{"status":"healthy","database":"connected"}`.
 
 ## Recommended next tasks
 
 1. Commit the staged frontend source, `.gitignore`, and project-status documentation.
-2. Introduce Alembic and replace startup-driven schema creation with managed migrations.
-3. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
+2. Add CI to run backend tests, frontend tests, and the frontend production build automatically.

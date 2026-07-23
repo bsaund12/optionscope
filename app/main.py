@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Literal, Mapping, Optional
@@ -16,7 +15,7 @@ from app.alpaca_client import (
     AlpacaClient,
     MAX_PROVIDER_OPTION_CHAIN_LIMIT,
 )
-from app.database import Base, database_is_available, engine, get_db
+from app.database import database_is_available, get_db
 from app.option_chain import (
     NormalizedOptionChainContract,
     normalize_chain_snapshot_mapping,
@@ -34,13 +33,6 @@ from app.validation import (
 )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Create database tables when OptionScope starts."""
-    Base.metadata.create_all(bind=engine)
-    yield
-
-
 app = FastAPI(
     title="OptionScope API",
     description=(
@@ -48,7 +40,6 @@ app = FastAPI(
         "payoff analysis, watchlists, and theoretical pricing."
     ),
     version="0.1.0",
-    lifespan=lifespan,
 )
 
 
