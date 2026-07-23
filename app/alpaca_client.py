@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional
 import httpx
 from fastapi import HTTPException, status
 
+MAX_PROVIDER_OPTION_CHAIN_LIMIT = 1000
 
 class AlpacaClient:
     """Small helper responsible for safely requesting Alpaca market data."""
@@ -205,8 +206,11 @@ class AlpacaClient:
         if option_type not in {"call", "put"}:
             raise ValueError("Option type must be 'call' or 'put'.")
 
-        if limit < 1 or limit > 100:
-            raise ValueError("Option-chain limit must be between 1 and 100.")
+        if limit < 1 or limit > MAX_PROVIDER_OPTION_CHAIN_LIMIT:
+            raise ValueError(
+                "Provider option-chain limit must be between 1 and "
+                f"{MAX_PROVIDER_OPTION_CHAIN_LIMIT}."
+            )
 
         normalized_symbol = symbol.strip().upper()
 

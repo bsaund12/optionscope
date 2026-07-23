@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -10,20 +12,25 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.alpaca_client import AlpacaClient
-from app.database import Base, database_is_available, engine, get_db
-
-from app.validation import (
-    normalize_ticker_symbol_for_api,
-    validate_expiration_date,
-    validate_strike_range,
+from app.alpaca_client import (
+    AlpacaClient,
+    MAX_PROVIDER_OPTION_CHAIN_LIMIT,
 )
-
+from app.database import Base, database_is_available, engine, get_db
 from app.option_chain import (
     NormalizedOptionChainContract,
     normalize_chain_snapshot_mapping,
     normalize_option_type,
     validate_chain_limit,
+)
+from app.option_selection import (
+    resolve_reference_price_from_snapshot,
+    select_nearest_option_contracts,
+)
+from app.validation import (
+    normalize_ticker_symbol_for_api,
+    validate_expiration_date,
+    validate_strike_range,
 )
 
 
@@ -44,10 +51,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 LOCAL_FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,7 +102,9 @@ def to_decimal_or_none(value: Any) -> Optional[Decimal]:
         return None
 
 
-def round_money_or_none(value: Optional[Decimal]) -> Optional[Decimal]:
+def round_money_or_none(
+    value: Optional[Decimal],
+) -> Optional[Decimal]:
     """Round a money value to four decimal places."""
 
     if value is None:
@@ -103,6 +114,26 @@ def round_money_or_none(value: Optional[Decimal]) -> Optional[Decimal]:
         Decimal("0.0001"),
         rounding=ROUND_HALF_UP,
     )
+
+
+def get_reference_price_or_502(
+    alpaca: AlpacaClient,
+    symbol: str,
+) -> Decimal:
+    """Get a usable underlying price for ATM-centered option selection."""
+
+    snapshot = alpaca.get_stock_snapshot(symbol)
+
+    try:
+        return resolve_reference_price_from_snapshot(snapshot)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"OptionScope could not find a usable reference price "
+                f"for '{symbol}'."
+            ),
+        ) from error
 
 
 @app.get("/")
@@ -139,7 +170,9 @@ def create_ticker(
     """Add a stock or ETF ticker to OptionScope."""
 
     existing_ticker = database.scalar(
-        select(models.Ticker).where(models.Ticker.symbol == ticker.symbol)
+        select(models.Ticker).where(
+            models.Ticker.symbol == ticker.symbol
+        )
     )
 
     if existing_ticker:
@@ -179,7 +212,9 @@ def list_tickers(
 ) -> list[models.Ticker]:
     """Return every ticker currently saved in OptionScope."""
 
-    statement = select(models.Ticker).order_by(models.Ticker.symbol)
+    statement = select(models.Ticker).order_by(
+        models.Ticker.symbol
+    )
 
     return list(database.scalars(statement).all())
 
@@ -201,7 +236,9 @@ def get_ticker(
     "/market/stocks/{symbol}/quote",
     response_model=schemas.StockQuoteResponse,
 )
-def get_stock_quote(symbol: str) -> schemas.StockQuoteResponse:
+def get_stock_quote(
+    symbol: str,
+) -> schemas.StockQuoteResponse:
     """Get the latest available Alpaca stock quote for one ticker."""
 
     normalized_symbol = normalize_ticker_symbol_for_api(symbol)
@@ -240,30 +277,53 @@ def get_stock_market_snapshot(
     previous_daily_bar = snapshot.get("prevDailyBar") or {}
 
     day_close = to_decimal_or_none(daily_bar.get("c"))
-    previous_close = to_decimal_or_none(previous_daily_bar.get("c"))
+    previous_close = to_decimal_or_none(
+        previous_daily_bar.get("c")
+    )
 
     day_change: Optional[Decimal] = None
     day_change_percent: Optional[Decimal] = None
 
-    if day_close is not None and previous_close not in (None, Decimal("0")):
-        day_change = round_money_or_none(day_close - previous_close)
+    if (
+        day_close is not None
+        and previous_close not in (None, Decimal("0"))
+    ):
+        day_change = round_money_or_none(
+            day_close - previous_close
+        )
 
         day_change_percent = round_money_or_none(
-            ((day_close - previous_close) / previous_close) * Decimal("100")
+            (
+                (day_close - previous_close)
+                / previous_close
+            )
+            * Decimal("100")
         )
 
     return schemas.StockMarketSnapshotResponse(
         symbol=normalized_symbol,
-        last_trade_price=to_decimal_or_none(latest_trade.get("p")),
+        last_trade_price=to_decimal_or_none(
+            latest_trade.get("p")
+        ),
         last_trade_timestamp=latest_trade.get("t"),
-        bid_price=to_decimal_or_none(latest_quote.get("bp")),
-        ask_price=to_decimal_or_none(latest_quote.get("ap")),
+        bid_price=to_decimal_or_none(
+            latest_quote.get("bp")
+        ),
+        ask_price=to_decimal_or_none(
+            latest_quote.get("ap")
+        ),
         bid_size=latest_quote.get("bs"),
         ask_size=latest_quote.get("as"),
         quote_timestamp=latest_quote.get("t"),
-        day_open=to_decimal_or_none(daily_bar.get("o")),
-        day_high=to_decimal_or_none(daily_bar.get("h")),
-        day_low=to_decimal_or_none(daily_bar.get("l")),
+        day_open=to_decimal_or_none(
+            daily_bar.get("o")
+        ),
+        day_high=to_decimal_or_none(
+            daily_bar.get("h")
+        ),
+        day_low=to_decimal_or_none(
+            daily_bar.get("l")
+        ),
         day_close=day_close,
         day_volume=daily_bar.get("v"),
         previous_close=previous_close,
@@ -283,7 +343,10 @@ def get_option_expirations(
         default=365,
         ge=7,
         le=730,
-        description="How far ahead to search for active option expirations.",
+        description=(
+            "How far ahead to search for active "
+            "option expirations."
+        ),
     ),
 ) -> schemas.OptionExpirationsResponse:
     """Return unique active option expiration dates for one ticker."""
@@ -291,7 +354,9 @@ def get_option_expirations(
     normalized_symbol = normalize_ticker_symbol_for_api(symbol)
 
     window_start = date.today()
-    window_end = window_start + timedelta(days=days_ahead)
+    window_end = window_start + timedelta(
+        days=days_ahead
+    )
 
     alpaca = AlpacaClient()
 
@@ -310,32 +375,46 @@ def get_option_expirations(
 
         pages_checked += 1
 
-        for contract in payload.get("option_contracts", []):
-            expiration_value = contract.get("expiration_date")
+        for contract in payload.get(
+            "option_contracts",
+            [],
+        ):
+            expiration_value = contract.get(
+                "expiration_date"
+            )
 
-            if not isinstance(expiration_value, str):
+            if not isinstance(
+                expiration_value,
+                str,
+            ):
                 continue
 
             try:
                 expiration_dates.add(
-                    date.fromisoformat(expiration_value)
+                    date.fromisoformat(
+                        expiration_value
+                    )
                 )
             except ValueError:
                 continue
 
-        page_token = payload.get("next_page_token")
+        page_token = payload.get(
+            "next_page_token"
+        )
 
         if not page_token:
             break
 
-    sorted_expirations = sorted(expiration_dates)
+    sorted_expirations = sorted(
+        expiration_dates
+    )
 
     if not sorted_expirations:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
-                f"Alpaca did not return active option expirations "
-                f"for '{normalized_symbol}'."
+                f"Alpaca did not return active option "
+                f"expirations for '{normalized_symbol}'."
             ),
         )
 
@@ -363,13 +442,17 @@ def option_card_to_response(
         strike_price=option_card.strike_price,
         last_trade_price=option_card.last_trade_price,
         last_trade_size=option_card.last_trade_size,
-        last_trade_timestamp=option_card.last_trade_timestamp,
+        last_trade_timestamp=(
+            option_card.last_trade_timestamp
+        ),
         bid_price=option_card.bid_price,
         ask_price=option_card.ask_price,
         bid_size=option_card.bid_size,
         ask_size=option_card.ask_size,
         quote_timestamp=option_card.quote_timestamp,
-        implied_volatility=option_card.implied_volatility,
+        implied_volatility=(
+            option_card.implied_volatility
+        ),
         delta=option_card.delta,
         gamma=option_card.gamma,
         theta=option_card.theta,
@@ -402,49 +485,81 @@ def load_option_chain_side(
     option_type: Literal["call", "put"],
     minimum_strike: Optional[Decimal],
     maximum_strike: Optional[Decimal],
+    reference_price: Decimal,
     limit: int,
 ) -> schemas.OptionChainSideResponse:
-    """Load, inspect, and clean one side of an option chain."""
+    """
+    Load one chain side, validate it, then select strikes nearest ATM.
+
+    The public result limit stays small, but OptionScope inspects a larger
+    bounded provider batch first so it can choose contracts near the live
+    underlying price instead of blindly keeping the lowest strikes.
+    """
 
     payload = alpaca.get_option_chain_page(
         symbol=symbol,
         expiration_date=expiration_date,
         option_type=option_type,
-        limit=limit,
+        limit=MAX_PROVIDER_OPTION_CHAIN_LIMIT,
         minimum_strike=minimum_strike,
         maximum_strike=maximum_strike,
     )
 
-    raw_snapshots = payload.get("snapshots", {})
+    raw_snapshots = payload.get(
+        "snapshots",
+        {},
+    )
 
-    if not isinstance(raw_snapshots, Mapping):
+    if not isinstance(
+        raw_snapshots,
+        Mapping,
+    ):
         raw_snapshots = {}
 
-    option_cards, skipped_contracts, optionscope_truncated = (
-        normalize_chain_snapshot_mapping(
-            raw_snapshots,
-            underlying_symbol=symbol,
-            expiration_date=expiration_date,
-            option_type=option_type,
-            limit=limit,
-            minimum_strike=minimum_strike,
-            maximum_strike=maximum_strike,
-        )
+    (
+        all_option_cards,
+        skipped_contracts,
+        _,
+    ) = normalize_chain_snapshot_mapping(
+        raw_snapshots,
+        underlying_symbol=symbol,
+        expiration_date=expiration_date,
+        option_type=option_type,
+        limit=None,
+        minimum_strike=minimum_strike,
+        maximum_strike=maximum_strike,
+    )
+
+    option_cards = select_nearest_option_contracts(
+        all_option_cards,
+        reference_price=reference_price,
+        limit=limit,
+    )
+
+    optionscope_truncated = (
+        len(all_option_cards)
+        > len(option_cards)
     )
 
     return schemas.OptionChainSideResponse(
         requested=True,
         option_type=option_type,
         contracts=[
-            option_card_to_response(option_card)
+            option_card_to_response(
+                option_card
+            )
             for option_card in option_cards
         ],
         contracts_returned=len(option_cards),
-        skipped_provider_contracts=skipped_contracts,
+        skipped_provider_contracts=(
+            skipped_contracts
+        ),
         provider_more_available=bool(
             payload.get("next_page_token")
         ),
-        optionscope_truncated=optionscope_truncated,
+        optionscope_truncated=(
+            optionscope_truncated
+        ),
     )
 
 
@@ -456,27 +571,43 @@ def get_option_chain(
     symbol: str,
     expiration_date: date = Query(
         ...,
-        description="Required option expiration date in YYYY-MM-DD format.",
+        description=(
+            "Required option expiration date "
+            "in YYYY-MM-DD format."
+        ),
     ),
-    option_type: Literal["call", "put", "all"] = Query(
+    option_type: Literal[
+        "call",
+        "put",
+        "all",
+    ] = Query(
         default="all",
-        description="Return calls, puts, or both.",
+        description=(
+            "Return calls, puts, or both."
+        ),
     ),
     minimum_strike: Optional[Decimal] = Query(
         default=None,
         gt=0,
-        description="Optional minimum strike price.",
+        description=(
+            "Optional minimum strike price."
+        ),
     ),
     maximum_strike: Optional[Decimal] = Query(
         default=None,
         gt=0,
-        description="Optional maximum strike price.",
+        description=(
+            "Optional maximum strike price."
+        ),
     ),
     limit: int = Query(
         default=50,
         ge=1,
         le=100,
-        description="Maximum contracts returned per requested side.",
+        description=(
+            "Maximum contracts returned "
+            "per requested side."
+        ),
     ),
 ) -> schemas.OptionChainResponse:
     """
@@ -485,53 +616,101 @@ def get_option_chain(
     The route never exposes Alpaca credentials, provider URLs, or page tokens.
     """
 
-    normalized_symbol = normalize_ticker_symbol_for_api(symbol)
+    normalized_symbol = (
+        normalize_ticker_symbol_for_api(
+            symbol
+        )
+    )
 
     try:
-        safe_expiration_date = validate_expiration_date(
-            expiration_date
-        )
-
-        safe_option_type = normalize_option_type(option_type)
-
-        safe_minimum_strike, safe_maximum_strike = (
-            validate_strike_range(
-                minimum_strike,
-                maximum_strike,
+        safe_expiration_date = (
+            validate_expiration_date(
+                expiration_date
             )
         )
 
-        safe_limit = validate_chain_limit(limit)
+        safe_option_type = normalize_option_type(
+            option_type
+        )
+
+        (
+            safe_minimum_strike,
+            safe_maximum_strike,
+        ) = validate_strike_range(
+            minimum_strike,
+            maximum_strike,
+        )
+
+        safe_limit = validate_chain_limit(
+            limit
+        )
     except ValueError as error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_CONTENT
+            ),
             detail=str(error),
         ) from error
 
     alpaca = AlpacaClient()
 
-    calls = empty_option_chain_side("call")
-    puts = empty_option_chain_side("put")
+    reference_price = (
+        get_reference_price_or_502(
+            alpaca,
+            normalized_symbol,
+        )
+    )
 
-    if safe_option_type in {"call", "all"}:
+    calls = empty_option_chain_side(
+        "call"
+    )
+    puts = empty_option_chain_side(
+        "put"
+    )
+
+    if safe_option_type in {
+        "call",
+        "all",
+    }:
         calls = load_option_chain_side(
             alpaca,
             symbol=normalized_symbol,
-            expiration_date=safe_expiration_date,
+            expiration_date=(
+                safe_expiration_date
+            ),
             option_type="call",
-            minimum_strike=safe_minimum_strike,
-            maximum_strike=safe_maximum_strike,
+            minimum_strike=(
+                safe_minimum_strike
+            ),
+            maximum_strike=(
+                safe_maximum_strike
+            ),
+            reference_price=(
+                reference_price
+            ),
             limit=safe_limit,
         )
 
-    if safe_option_type in {"put", "all"}:
+    if safe_option_type in {
+        "put",
+        "all",
+    }:
         puts = load_option_chain_side(
             alpaca,
             symbol=normalized_symbol,
-            expiration_date=safe_expiration_date,
+            expiration_date=(
+                safe_expiration_date
+            ),
             option_type="put",
-            minimum_strike=safe_minimum_strike,
-            maximum_strike=safe_maximum_strike,
+            minimum_strike=(
+                safe_minimum_strike
+            ),
+            maximum_strike=(
+                safe_maximum_strike
+            ),
+            reference_price=(
+                reference_price
+            ),
             limit=safe_limit,
         )
 
@@ -545,12 +724,20 @@ def get_option_chain(
     return schemas.OptionChainResponse(
         symbol=normalized_symbol,
         expiration_date=safe_expiration_date,
-        requested_option_type=safe_option_type,
-        minimum_strike=safe_minimum_strike,
-        maximum_strike=safe_maximum_strike,
+        requested_option_type=(
+            safe_option_type
+        ),
+        minimum_strike=(
+            safe_minimum_strike
+        ),
+        maximum_strike=(
+            safe_maximum_strike
+        ),
         limit_per_side=safe_limit,
         calls=calls,
         puts=puts,
-        response_may_be_incomplete=response_may_be_incomplete,
+        response_may_be_incomplete=(
+            response_may_be_incomplete
+        ),
         feed=alpaca.options_feed,
     )
