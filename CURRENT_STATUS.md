@@ -113,9 +113,6 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
 
 ## Known issues
 
-- **Hardcoded fallback `DATABASE_URL`** in `app/database.py`:
-  - Includes a placeholder password.
-  - If the environment variable is missing, the application silently uses the fallback instead of failing fast.
 - **No database migrations**:
   - Tables are currently created through `Base.metadata.create_all()` during application startup.
   - Alembic is not configured.
@@ -162,7 +159,7 @@ python -m pytest -v
 Confirmed result:
 
 ```text
-67 passed in 0.32s
+72 passed in 0.38s
 ```
 
 The current backend suite covers:
@@ -179,6 +176,7 @@ The current backend suite covers:
 - Nearest-to-price option selection.
 - Alpaca option-chain request construction.
 - Option-chain endpoint orchestration through direct function calls.
+- `DATABASE_URL` configuration validation (missing, empty, whitespace-only, and valid values).
 
 Remaining backend coverage gaps include:
 
@@ -240,6 +238,5 @@ No CI configuration currently exists. Backend and frontend verification must be 
 ## Recommended next tasks
 
 1. Commit the staged frontend source, `.gitignore`, and project-status documentation.
-2. Remove the fallback `DATABASE_URL` and require explicit database configuration.
-3. Introduce Alembic and replace startup-driven schema creation with managed migrations.
-4. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
+2. Introduce Alembic and replace startup-driven schema creation with managed migrations.
+3. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
