@@ -1,6 +1,6 @@
 # OptionScope — Current Status
 
-_Last updated: 2026-07-23_
+_Last updated: 2026-07-24_
 
 ## Architecture
 
@@ -124,9 +124,7 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
   - This is expected during early development but blocks a safe public deployment.
 - **No OptionScope API rate limiting**:
   - A caller could repeatedly invoke OptionScope endpoints and consume Alpaca rate limits or paid usage.
-- **README.md is incomplete and inaccurate**:
-  - It contains an unclosed code fence and incomplete setup instructions.
-  - It overstates capabilities such as spreads, theoretical pricing, and computed Greeks or volatility analysis.
+- **README.md previously overstated capabilities** such as spreads, theoretical pricing, and computed Greeks or volatility analysis. It now separates "Currently implemented" from "Planned / roadmap" functionality (corrected 2026-07-24).
 - **All backend routes remain in one `main.py` file**:
   - The file is approximately 740 lines.
   - This is not yet an urgent problem, but routes should be split into dedicated routers as the API surface grows.
@@ -216,7 +214,14 @@ cd ..
 
 ### Continuous integration
 
-No CI configuration currently exists. Backend and frontend verification must be run manually.
+Added 2026-07-24: `.github/workflows/ci.yml` runs on pull requests targeting `main` and on pushes to `main`, with `permissions: contents: read` at the workflow level.
+
+- **`backend` job**: starts a `postgres:16-alpine` service container (dummy CI-only credentials, matching `docker-compose.yml`'s healthcheck pattern), installs `requirements-dev.txt` on Python 3.12, runs `alembic upgrade head` against the service container, then runs `pytest`. No Alpaca credentials are provided or required — all Alpaca-touching tests mock the client.
+- **`frontend` job**: runs in `frontend/`, uses Node 24 (matches `vite`'s and `vitest`'s `engines` requirements), runs `npm ci`, `npm test` (`vitest run`, non-interactive), and `npm run build`.
+
+`frontend/package-lock.json` (already tracked in Git) was regenerated via `npm install` to confirm it is current and that `npm ci` succeeds against it — content was unchanged.
+
+Both jobs were validated locally before opening this branch (commands and output below); actual execution on GitHub Actions runners has not yet been observed. See "Recommended next tasks" for the follow-up needed to confirm that.
 
 ## Important engineering decisions
 
@@ -236,5 +241,5 @@ No CI configuration currently exists. Backend and frontend verification must be 
 
 ## Recommended next tasks
 
-1. Commit the staged frontend source, `.gitignore`, and project-status documentation.
-2. Add CI to run backend tests, frontend tests, and the frontend production build automatically.
+1. Merge `chore/ci-pipeline` and confirm the `backend` and `frontend` jobs both pass on an actual GitHub Actions run (not just local validation).
+2. Decide the next feature: multi-leg option spreads is the largest gap between the (now-corrected) README and actual functionality.

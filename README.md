@@ -1,12 +1,27 @@
 # OptionScope
 
-OptionScope is an options-analysis platform for:
+OptionScope is an options-analysis platform.
 
-- Watchlists and market snapshots
-- Option-chain exploration
-- Calls, puts, spreads, and payoff analysis
-- Theoretical option pricing
-- Greeks and volatility analysis
+## Currently implemented
+
+- Ticker watchlists (create, list, retrieve).
+- Stock quotes and market snapshots.
+- Option-chain exploration, including expiration lookup and nearest-strike,
+  filtered chain retrieval.
+- Single-leg payoff analysis (long/short calls and puts) via the frontend
+  Position Lens, using option-chain data already loaded in the browser.
+
+Greek values shown are passed through from Alpaca; OptionScope does not yet
+compute them itself.
+
+## Planned / roadmap
+
+The following are not yet implemented:
+
+- Multi-leg option spreads.
+- Theoretical option pricing (e.g. Black-Scholes).
+- Internally computed Greeks.
+- Implied-volatility analysis.
 
 ## Local development
 
