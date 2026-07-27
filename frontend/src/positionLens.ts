@@ -44,7 +44,7 @@ export interface PositionAnalysis {
   caution: string;
 }
 
-function parsePositivePrice(value: ApiDecimal): number | null {
+export function parsePositivePrice(value: ApiDecimal): number | null {
   if (value === null) {
     return null;
   }
@@ -58,7 +58,9 @@ function parsePositivePrice(value: ApiDecimal): number | null {
   return parsedValue;
 }
 
-function getContractStrike(contract: OptionChainContract): number | null {
+export function getContractStrike(
+  contract: OptionChainContract,
+): number | null {
   return parsePositivePrice(contract.strike_price);
 }
 
@@ -72,13 +74,13 @@ function getExpectedOptionType(
   return position.endsWith("call") ? "call" : "put";
 }
 
-function getUnavailableOutcome(): PositionOutcome {
+export function getUnavailableOutcome(): PositionOutcome {
   return {
     kind: "unavailable",
   };
 }
 
-function getMoneyOutcome(amount: number): PositionOutcome {
+export function getMoneyOutcome(amount: number): PositionOutcome {
   return {
     kind: "money",
     amount,
