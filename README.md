@@ -7,9 +7,28 @@ OptionScope is an options-analysis platform.
 - Ticker watchlists (create, list, retrieve).
 - Stock quotes and market snapshots.
 - Option-chain exploration, including expiration lookup and nearest-strike,
-  filtered chain retrieval.
-- Single-leg payoff analysis (long/short calls and puts) via the frontend
-  Position Lens, using option-chain data already loaded in the browser.
+  filtered, at-the-money-centered chain retrieval.
+- Single-leg Position Lens analysis for long calls, short calls, long puts,
+  and short puts, using option-chain data already loaded in the browser.
+- Vertical Spread Builder analysis for bull call, bear call, bear put, and
+  bull put spreads, including:
+  - Long-leg and short-leg quote references.
+  - Strike width.
+  - Net debit or credit per share and per contract.
+  - Break-even price.
+  - Maximum profit and maximum loss.
+  - Validation of option type, expiration, underlying symbol, and strike
+    ordering before two contracts can be analyzed together.
+  - Clear "unavailable" results, instead of misleading numbers, when quotes
+    are missing, invalid, or produce an inverted (zero or negative) debit or
+    credit.
+
+All calculations are expiration-only estimates. This is read-only analysis —
+OptionScope does not submit or execute brokerage orders.
+
+Quote conventions: long legs use the ask price when available, short legs
+use the bid price when available, and the last trade price is used as a
+fallback when the preferred quote is unavailable.
 
 Greek values shown are passed through from Alpaca; OptionScope does not yet
 compute them itself.
@@ -18,10 +37,24 @@ compute them itself.
 
 The following are not yet implemented:
 
-- Multi-leg option spreads.
+- Additional multi-leg strategies beyond vertical spreads.
 - Theoretical option pricing (e.g. Black-Scholes).
 - Internally computed Greeks.
 - Implied-volatility analysis.
+- Production deployment and infrastructure hardening.
+
+## Testing and CI
+
+GitHub Actions runs a `backend` job and a `frontend` job on pull requests
+targeting `main` and on pushes to `main`.
+
+- The `backend` job starts PostgreSQL, runs Alembic migrations, and runs
+  `pytest`.
+- The `frontend` job runs `npm ci`, the Vitest test suite, and the
+  production build.
+
+Latest verified results: 72 backend tests passing, and 3 frontend test files
+(34 tests) passing.
 
 ## Local development
 
@@ -47,6 +80,19 @@ OptionScope requires the `DATABASE_URL` environment variable to be set explicitl
 
 ```bash
 export DATABASE_URL="postgresql+psycopg://optionscope_user:<password>@localhost:5433/optionscope"
+```
+
+### Running the frontend
+
+The frontend runs outside Docker Compose and is not yet containerized. It
+expects the backend API to already be running locally (via Docker Compose or
+directly on the host, as described above) at the URL configured by
+`VITE_API_BASE_URL`, or `http://localhost:8000` by default.
+
+```bash
+cd frontend
+npm ci
+npm run dev
 ```
 
 ### Database migrations

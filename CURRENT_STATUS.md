@@ -1,6 +1,6 @@
 # OptionScope — Current Status
 
-_Last updated: 2026-07-24_
+_Last updated: 2026-07-27_
 
 ## Architecture
 
@@ -8,8 +8,10 @@ OptionScope currently uses a single-service FastAPI backend (`app/`) backed by P
 
 - **api** — FastAPI and Uvicorn, containerized through Docker Compose.
 - **db** — PostgreSQL 16, containerized through Docker Compose.
-- **frontend** — Vite development server that currently runs outside Docker Compose; it is not yet built, containerized, or deployed.
+- **frontend** — Vite development server that still runs outside Docker Compose; it is not yet built, containerized, or deployed.
 - **Alpaca** — Sole external market-data provider, called synchronously through `httpx` from synchronous `def` route handlers.
+
+There is no production deployment yet for any component (API, database, or frontend).
 
 The synchronous route handlers are appropriate for the current blocking HTTP client because FastAPI executes them in a thread pool rather than blocking the main asynchronous event loop.
 
@@ -46,65 +48,73 @@ Provider responses are normalized into internal dataclasses and Pydantic schemas
   - Chain limits.
 - `/health` database-connectivity check.
 
-### Frontend
+### Implemented frontend functionality
 
-The frontend test suite and production build were verified successfully on 2026-07-23.
+#### Position Lens
 
-Test command:
+- Client-side, single-leg payoff estimate (`frontend/src/positionLens.ts`).
+- Supports long calls, short calls, long puts, and short puts.
+- Calculates expiration-only payoff (break-even, maximum profit, maximum
+  loss) from option-chain data already loaded in the browser.
 
-```bash
-cd frontend
-npm test -- --run
-```
+#### Vertical-spread calculation engine
 
-Confirmed result:
+`frontend/src/verticalSpreads.ts` adds a reusable, two-leg calculation
+engine used by the Vertical Spread Builder UI:
 
-```text
-Test Files  1 passed (1)
-Tests       5 passed (5)
-Duration    88ms
-```
+- Supports four strategies: bull call spread, bear call spread, bear put
+  spread, and bull put spread.
+- Strategy rules (required option type, long-leg strike position, outlook,
+  debit/credit kind) are centralized in one metadata table and exposed via
+  `getVerticalSpreadRequirements()`, rather than duplicated per strategy.
+- Validates that both legs share the same underlying symbol, the same
+  expiration date, and the correct option type for the selected strategy,
+  and that the long and short legs are correctly ordered by strike (and are
+  not the same strike).
+- Follows the existing Position Lens quote convention: long legs use the
+  ask price, short legs use the bid price, and the last trade price is used
+  as a fallback when the preferred quote is unavailable.
+- Returns a clearly marked "unavailable" result — instead of a misleading
+  number — when a required quote is missing, or when the available quotes
+  would produce a zero or negative (inverted) net debit or credit.
+- Calculates strike width, net debit/credit per share and per contract,
+  break-even price, maximum profit, and maximum loss.
 
-The current Vitest suite covers five `positionLens.ts` scenarios:
+#### Vertical Spread Builder UI
 
-- Long-call payoff using the ask as the debit reference.
-- Short-call payoff using the bid as the credit reference.
-- Long-put payoff limits at expiration.
-- Short-put payoff limits at expiration.
-- Rejection of a position that does not match the selected contract.
+`frontend/src/components/VerticalSpreadBuilder.tsx` connects the
+calculation engine to the option chain already loaded in the browser:
 
-Production build command:
-
-```bash
-npm run build
-```
-
-Confirmed result:
-
-```text
-18 modules transformed
-Production build completed successfully in 76ms
-```
-
-Known frontend coverage gaps include:
-
-- `App.tsx` state management.
-- Form handling.
-- API orchestration.
-- Loading states.
-- Error states.
-- Rendering market snapshot and option-chain responses.
-
-- **Position Lens**:
-  - Client-side, single-leg payoff estimate.
-  - Supports long calls, short calls, long puts, and short puts.
-  - Calculates expiration-only payoff from option-chain data already loaded in the browser.
+- Strategy selection across all four supported spreads.
+- Long-leg and short-leg selection from the currently loaded chain.
+- Incompatible contracts are disabled in each selector, with the reason
+  shown directly in the option text (e.g. "must be higher than long leg").
+- Analysis renders automatically once both legs are validly selected, using
+  the engine's output directly — no spread math is duplicated in the
+  component.
+- "Reset selections" clears both legs without closing the builder or
+  reloading the chain.
+- "Close spread builder" removes the builder without reloading the option
+  chain.
+- Switching strategy clears both selected legs, since each strategy
+  requires a different option type and/or strike ordering.
+- Loading a new ticker or a new option chain in `App.tsx` closes the
+  builder, so it can never hold a stale contract reference from a previous
+  chain.
+- Desktop (multi-column) and narrow-width (single-column) responsive
+  layout, manually verified in the browser.
+- Read-only analysis only — no order entry or brokerage execution.
+- An unexpected error from the calculation engine is caught and rendered as
+  an inline message rather than crashing the component; the engine's own
+  validation remains the authoritative safety layer, and the UI's
+  disabling of incompatible options is a convenience on top of it, not a
+  replacement for it.
 
 ### Not yet implemented
 
 The following capabilities are mentioned or implied in the current README but are not yet implemented:
 
-- Multi-leg option spreads.
+- Additional multi-leg strategies beyond vertical spreads.
 - Theoretical option pricing such as Black-Scholes.
 - Internally computed Greeks.
 - Implied-volatility analysis.
@@ -124,10 +134,16 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
   - This is expected during early development but blocks a safe public deployment.
 - **No OptionScope API rate limiting**:
   - A caller could repeatedly invoke OptionScope endpoints and consume Alpaca rate limits or paid usage.
-- **README.md previously overstated capabilities** such as spreads, theoretical pricing, and computed Greeks or volatility analysis. It now separates "Currently implemented" from "Planned / roadmap" functionality (corrected 2026-07-24).
+- **README.md previously overstated capabilities** such as spreads, theoretical pricing, and computed Greeks or volatility analysis. It now separates "Currently implemented" from "Planned / roadmap" functionality (corrected 2026-07-24), and "Currently implemented" now includes the Vertical Spread Builder (corrected 2026-07-27).
 - **All backend routes remain in one `main.py` file**:
   - The file is approximately 740 lines.
   - This is not yet an urgent problem, but routes should be split into dedicated routers as the API surface grows.
+- **`App.tsx` is growing as the frontend gains features**:
+  - It still owns most page-level state (ticker search, chain loading,
+    Position Lens, and the Vertical Spread Builder toggle) directly.
+  - Formatting helpers have been extracted to `format.ts`, and the spread
+    builder itself lives in its own component, but `App.tsx` would benefit
+    from further decomposition as more features are added.
 - **Frontend deployment is incomplete**:
   - The frontend is not containerized.
   - It is not served by the backend.
@@ -137,7 +153,7 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
 
 ### Backend
 
-The backend test suite was run successfully on 2026-07-23.
+The backend test suite was run successfully on 2026-07-27.
 
 Environment:
 
@@ -153,7 +169,7 @@ python -m pytest -v
 Confirmed result:
 
 ```text
-72 passed in 0.38s
+72 passed
 ```
 
 The current backend suite covers:
@@ -190,38 +206,77 @@ Remaining backend coverage gaps include:
 
 ### Frontend
 
-Vitest currently includes tests for `positionLens.ts` payoff calculations.
+The frontend test suite and production build were verified successfully on 2026-07-27.
 
-Known frontend coverage gaps include:
-
-- `App.tsx` state management.
-- Form handling.
-- API orchestration.
-- Loading states.
-- Error states.
-- Rendering option-chain and snapshot responses.
-
-The frontend test suite and production build have not yet been verified during this session.
-
-Run:
+Test command:
 
 ```bash
 cd frontend
-npm test -- --run
-npm run build
-cd ..
+npm test
 ```
+
+Confirmed result:
+
+```text
+Test Files  3 passed (3)
+Tests       34 passed (34)
+```
+
+The current Vitest suite covers:
+
+- `positionLens.test.ts` — single-leg payoff calculations for long/short
+  calls and puts.
+- `verticalSpreads.test.ts` — all four vertical-spread strategies, the
+  centralized strategy-requirement metadata, the long-ask/short-bid quote
+  convention with last-trade fallback, and missing/inverted quote handling.
+- `components/VerticalSpreadBuilder.test.tsx` — strategy selection, long-leg
+  and short-leg selection, disabling of incompatible contracts, successful
+  metric rendering, Reset and Close behavior, strategy-switch clearing,
+  empty-option-side handling, and defensive rendering of an unexpected
+  engine error.
+
+Production build command:
+
+```bash
+npm run build
+```
+
+Confirmed result:
+
+```text
+tsc -b && vite build
+21 modules transformed
+Production build completed successfully
+```
+
+Known frontend coverage gaps include:
+
+- `App.tsx` state management (ticker search, chain loading, error/loading
+  states) as a whole.
+- API orchestration and rendering of market-snapshot and option-chain
+  responses.
+- End-to-end/browser-level tests (current coverage is component-level via
+  React Testing Library plus pure-calculation tests).
 
 ### Continuous integration
 
-Added 2026-07-24: `.github/workflows/ci.yml` runs on pull requests targeting `main` and on pushes to `main`, with `permissions: contents: read` at the workflow level.
+`.github/workflows/ci.yml` runs on pull requests targeting `main` and on pushes to `main`, with `permissions: contents: read` at the workflow level. CI is active and has passed on GitHub Actions for both jobs.
 
 - **`backend` job**: starts a `postgres:16-alpine` service container (dummy CI-only credentials, matching `docker-compose.yml`'s healthcheck pattern), installs `requirements-dev.txt` on Python 3.12, runs `alembic upgrade head` against the service container, then runs `pytest`. No Alpaca credentials are provided or required — all Alpaca-touching tests mock the client.
 - **`frontend` job**: runs in `frontend/`, uses Node 24 (matches `vite`'s and `vitest`'s `engines` requirements), runs `npm ci`, `npm test` (`vitest run`, non-interactive), and `npm run build`.
 
-`frontend/package-lock.json` (already tracked in Git) was regenerated via `npm install` to confirm it is current and that `npm ci` succeeds against it — content was unchanged.
-
-Both jobs were validated locally before opening this branch (commands and output below); actual execution on GitHub Actions runners has not yet been observed. See "Recommended next tasks" for the follow-up needed to confirm that.
+The first Actions run for the Vertical Spread Builder pull request (PR #5)
+failed in the `frontend` job during the `npm ci` step: `package-lock.json`
+had been regenerated on macOS, which pruned a handful of Linux-only
+optional dependency entries (`@emnapi/core`, `@emnapi/runtime`,
+`@emnapi/wasi-threads`) that the Linux CI runner needed. This was a
+lockfile-generation/platform issue, not an application defect. The
+diagnosis was reproduced locally in a clean `node:24-bookworm-slim`
+container before making any change, the lockfile was then regenerated in
+that same clean Linux container and re-verified there, and the corrected
+lockfile was committed separately (`fix: restore cross-platform frontend
+lockfile`). The re-run of the workflow then passed dependency installation,
+tests, and the production build.
 
 ## Important engineering decisions
 
@@ -238,8 +293,37 @@ Both jobs were validated locally before opening this branch (commands and output
 - Alembic (`alembic/env.py`) obtains `DATABASE_URL` through the same `require_database_url()` helper the application uses, rather than a connection string in `alembic.ini`, so migrations fail the same way the app does when configuration is missing.
 - Docker Compose's `api` service now runs `alembic upgrade head` before starting Uvicorn, so schema is brought up to date automatically on container startup.
 - The Docker Compose database was already at the baseline schema (created by the old `create_all()` behavior). It was reconciled with a one-time `alembic stamp 4de9997abbde` run in a temporary one-off `api` container, verified with `alembic current`. The existing `tickers` table and its rows were confirmed present and unchanged before and after. Docker Compose was then started normally; `alembic upgrade head` ran on `api` startup, found the database already at head (no `CREATE TABLE` was issued), and `/health` returned `{"status":"healthy","database":"connected"}`.
+- Vertical-spread formulas live only in `verticalSpreads.ts`; the UI
+  component reuses `analyzeVerticalSpread()` and never re-derives break-even,
+  profit, or loss math itself.
+- The Vertical Spread Builder derives which contracts are selectable from
+  the same centralized strategy metadata the engine uses
+  (`getVerticalSpreadRequirements()`), instead of re-encoding each
+  strategy's rules a second time in the component.
+- Invalid strike combinations are disabled in the UI before selection is
+  even possible, but the engine's own validation remains the final safety
+  layer — the component still calls `analyzeVerticalSpread()` inside a
+  `try`/`catch` so an unexpected mismatch cannot crash the React tree.
+- Shared formatting helpers (currency, outcome, quote-source labels) were
+  extracted from `App.tsx` into `format.ts` so both `App.tsx` and
+  `VerticalSpreadBuilder.tsx` use one implementation.
+- Frontend component tests (`VerticalSpreadBuilder.test.tsx`) use React
+  Testing Library and a `jsdom` environment scoped to that file via a
+  `// @vitest-environment jsdom` pragma; pure-calculation tests
+  (`positionLens.test.ts`, `verticalSpreads.test.ts`) keep running in
+  Vitest's default Node environment, so most of the suite stays fast.
+- The frontend lockfile (`package-lock.json`) is maintained so that a clean
+  `npm ci` succeeds on the Linux CI runners it actually targets, not just
+  on the platform it happens to be regenerated on.
 
 ## Recommended next tasks
 
-1. Merge `chore/ci-pipeline` and confirm the `backend` and `frontend` jobs both pass on an actual GitHub Actions run (not just local validation).
-2. Decide the next feature: multi-leg option spreads is the largest gap between the (now-corrected) README and actual functionality.
+1. Refactor the growing `App.tsx` into smaller focused components.
+2. Add provider retry/backoff and a caching layer for Alpaca requests.
+3. Expand backend HTTP and database integration coverage (`TestClient`,
+   `/tickers`, `/health`, and Alpaca error-translation tests).
+4. Add safe authentication, authorization, and rate limiting before any
+   public deployment.
+5. Plan production deployment for the API, database, and frontend.
+6. Evaluate the next analytics feature: additional multi-leg strategies,
+   theoretical pricing, or implied-volatility tools.
