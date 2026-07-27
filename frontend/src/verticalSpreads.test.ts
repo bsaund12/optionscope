@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ApiDecimal, OptionChainContract } from "./api";
-import { analyzeVerticalSpread } from "./verticalSpreads";
+import {
+  analyzeVerticalSpread,
+  getVerticalSpreadRequirements,
+} from "./verticalSpreads";
 
 interface ContractOverrides {
   underlying_symbol?: string;
@@ -352,5 +355,47 @@ describe("analyzeVerticalSpread", () => {
     expect(analysis.maximumLoss).toEqual({ kind: "unavailable" });
     expect(analysis.caution).toMatch(/invalid or inverted/);
     expect(analysis.strikeWidth).toBe(5);
+  });
+});
+
+describe("getVerticalSpreadRequirements", () => {
+  it("describes a bull call spread as a debit call strategy with a lower-strike long leg", () => {
+    expect(getVerticalSpreadRequirements("bull_call_spread")).toEqual({
+      title: "Bull Call Spread",
+      optionType: "call",
+      outlook: "bullish",
+      entryKind: "debit",
+      longStrikePosition: "lower",
+    });
+  });
+
+  it("describes a bear call spread as a credit call strategy with a higher-strike long leg", () => {
+    expect(getVerticalSpreadRequirements("bear_call_spread")).toEqual({
+      title: "Bear Call Spread",
+      optionType: "call",
+      outlook: "bearish",
+      entryKind: "credit",
+      longStrikePosition: "higher",
+    });
+  });
+
+  it("describes a bear put spread as a debit put strategy with a higher-strike long leg", () => {
+    expect(getVerticalSpreadRequirements("bear_put_spread")).toEqual({
+      title: "Bear Put Spread",
+      optionType: "put",
+      outlook: "bearish",
+      entryKind: "debit",
+      longStrikePosition: "higher",
+    });
+  });
+
+  it("describes a bull put spread as a credit put strategy with a lower-strike long leg", () => {
+    expect(getVerticalSpreadRequirements("bull_put_spread")).toEqual({
+      title: "Bull Put Spread",
+      optionType: "put",
+      outlook: "bullish",
+      entryKind: "credit",
+      longStrikePosition: "lower",
+    });
   });
 });

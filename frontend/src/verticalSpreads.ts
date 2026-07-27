@@ -105,6 +105,28 @@ export function getVerticalSpreadLabel(
   return VERTICAL_SPREAD_DEFINITIONS[strategy].title;
 }
 
+export interface VerticalSpreadRequirements {
+  title: string;
+  optionType: "call" | "put";
+  outlook: "bullish" | "bearish";
+  entryKind: "debit" | "credit";
+  longStrikePosition: "lower" | "higher";
+}
+
+export function getVerticalSpreadRequirements(
+  strategy: VerticalSpreadStrategy,
+): VerticalSpreadRequirements {
+  const definition = VERTICAL_SPREAD_DEFINITIONS[strategy];
+
+  return {
+    title: definition.title,
+    optionType: definition.optionType,
+    outlook: definition.outlook,
+    entryKind: definition.entryKind,
+    longStrikePosition: definition.longStrikePosition,
+  };
+}
+
 function assertSameUnderlying(
   longContract: OptionChainContract,
   shortContract: OptionChainContract,
