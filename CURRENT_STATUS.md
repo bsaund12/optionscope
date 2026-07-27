@@ -121,6 +121,109 @@ The following capabilities are mentioned or implied in the current README but ar
 
 Current Greek values are passed through from Alpaca rather than calculated by OptionScope.
 
+## Frontend App Decomposition and Workflow Test Coverage (2026-07-27)
+
+This milestone split the growing `App.tsx` into focused presentation
+components and added characterization test coverage for both the extracted
+components and the App-level workflow, without changing application
+behavior.
+
+### Refactor result
+
+- `App.tsx` reduced from 940 to 365 lines — 575 lines removed, a 61.2%
+  reduction.
+- `App.tsx` now primarily owns:
+  - Application state (ticker input, loaded symbol, snapshot, expirations,
+    filters, loaded chain, Position Lens selection, Vertical Spread Builder
+    visibility, loading and error states).
+  - Validation (empty-ticker and result-limit checks).
+  - API orchestration (`getStockSnapshot`, `getOptionExpirations`,
+    `getOptionChain`).
+  - Stale-state clearing on a new ticker search or a chain reload.
+  - High-level page composition.
+  - Scroll-to-Position-Lens behavior.
+
+### Extracted files
+
+- `frontend/src/marketView.ts` — pure formatting and moneyness-classification
+  helpers previously defined inline in `App.tsx`.
+- `frontend/src/components/MarketSearchForm.tsx`
+- `frontend/src/components/MarketSnapshot.tsx`
+- `frontend/src/components/OptionChainControls.tsx`
+- `frontend/src/components/OptionChainTable.tsx`
+- `frontend/src/components/PositionLens.tsx`
+
+### New test coverage
+
+- `frontend/src/App.test.tsx` — App-level workflow characterization tests
+  against mocked API responses.
+- `frontend/src/marketView.test.ts`
+- `frontend/src/components/MarketSearchForm.test.tsx`
+- `frontend/src/components/MarketSnapshot.test.tsx`
+- `frontend/src/components/OptionChainControls.test.tsx`
+- `frontend/src/components/OptionChainTable.test.tsx`
+- `frontend/src/components/PositionLens.test.tsx`
+
+Verified total: 10 frontend test files, 173 frontend tests, all passing.
+
+### Verification
+
+- TypeScript compilation (`tsc -b`) passes.
+- ESLint passes.
+- The production build passes; 27 modules transformed.
+- Backend: 72 pytest tests passing (no backend files were changed by this
+  milestone).
+- Manual smoke test passed locally across multiple tickers, covering market
+  snapshot rendering, expiration/strike/side filtering, calls-only,
+  puts-only, and calls-and-puts chains, Position Lens for calls and puts in
+  both long and short modes, all four vertical-spread strategies, Reset and
+  Close behavior, new-ticker and chain-reload stale-state clearing,
+  validation and error states, and the narrow/mobile layout.
+- No visible behavior or styling regressions were found during manual
+  testing.
+- This branch (`refactor/frontend-app-decomposition`) has not yet been
+  pushed or opened as a pull request, so its own GitHub Actions run has not
+  executed — only local verification is reflected above.
+
+### Architectural decisions
+
+- `App.tsx` retains cross-section workflow state and all API orchestration;
+  extracted components remain controlled and stateless, receiving values and
+  callbacks as props.
+- API calls remain centralized in `App.tsx`; no presentation component calls
+  `getStockSnapshot`, `getOptionExpirations`, or `getOptionChain` directly.
+- Payoff and spread-calculation formulas remain centralized in
+  `positionLens.ts` and `verticalSpreads.ts`; `PositionLens.tsx` and
+  `VerticalSpreadBuilder.tsx` render the engines' output rather than
+  re-deriving it.
+- `marketView.ts` contains only pure display and moneyness-classification
+  helpers — no React code and no API requests.
+- The option-chain results composition (data notice, spread-builder toggle,
+  `VerticalSpreadBuilder`, `PositionLens`, and the calls/puts grid) remains
+  inline in `App.tsx` rather than being extracted into its own wrapper
+  component, because doing so would primarily relocate a broad prop
+  interface rather than reduce meaningful complexity.
+- No new state library, form library, data-fetching library, routing
+  library, or UI framework was introduced, and no dependencies were added.
+
+### Known behavior
+
+The existing default strike-window calculation (`getDefaultStrikeWindow` in
+`marketView.ts`) can round the upper bound up by an extra strike increment
+for some reference prices, because of ordinary JavaScript floating-point
+arithmetic (for example, `100 * 1.1` evaluates to `110.00000000000001`, not
+`110`). Examples characterized by `marketView.test.ts` include:
+
+- A $50 reference price produces a maximum strike of `57.5` rather than the
+  arithmetically "clean" `55`.
+- A $100 reference price produces a maximum strike of `115` rather than the
+  arithmetically "clean" `110`.
+
+This behavior existed before this refactor and was intentionally preserved
+byte-for-byte during it, rather than corrected as an incidental side effect
+of structural work. It should be addressed later as its own focused behavior
+change.
+
 ## Known issues
 
 - **No retry or backoff behavior for Alpaca requests**:
@@ -138,12 +241,14 @@ Current Greek values are passed through from Alpaca rather than calculated by Op
 - **All backend routes remain in one `main.py` file**:
   - The file is approximately 740 lines.
   - This is not yet an urgent problem, but routes should be split into dedicated routers as the API surface grows.
-- **`App.tsx` is growing as the frontend gains features**:
-  - It still owns most page-level state (ticker search, chain loading,
-    Position Lens, and the Vertical Spread Builder toggle) directly.
-  - Formatting helpers have been extracted to `format.ts`, and the spread
-    builder itself lives in its own component, but `App.tsx` would benefit
-    from further decomposition as more features are added.
+- **`App.tsx` was decomposed into focused presentation components
+  (corrected 2026-07-27)**:
+  - `App.tsx` is now 365 lines (down from 940) and owns application state,
+    validation, and API orchestration; presentation was extracted into
+    `MarketSearchForm`, `MarketSnapshot`, `OptionChainControls`,
+    `OptionChainTable`, and `PositionLens`, with shared display helpers in
+    `marketView.ts`. See "Frontend App Decomposition and Workflow Test
+    Coverage" above for details.
 - **Frontend deployment is incomplete**:
   - The frontend is not containerized.
   - It is not served by the backend.
@@ -206,7 +311,8 @@ Remaining backend coverage gaps include:
 
 ### Frontend
 
-The frontend test suite and production build were verified successfully on 2026-07-27.
+The frontend test suite, lint, and production build were verified
+successfully on 2026-07-27, after the App decomposition milestone.
 
 Test command:
 
@@ -218,8 +324,8 @@ npm test
 Confirmed result:
 
 ```text
-Test Files  3 passed (3)
-Tests       34 passed (34)
+Test Files  10 passed (10)
+Tests       173 passed (173)
 ```
 
 The current Vitest suite covers:
@@ -234,6 +340,35 @@ The current Vitest suite covers:
   metric rendering, Reset and Close behavior, strategy-switch clearing,
   empty-option-side handling, and defensive rendering of an unexpected
   engine error.
+- `marketView.test.ts` — pure formatting, timestamp, default strike-window
+  (including the known floating-point rounding cases), directional-class,
+  and moneyness-classification helpers.
+- `components/MarketSearchForm.test.tsx` — controlled ticker input, Search
+  and Enter submission, and loading-state rendering.
+- `components/MarketSnapshot.test.tsx` — timestamp fallback, metric
+  formatting, directional styling, and the `latestPrice` prop boundary.
+- `components/OptionChainControls.test.tsx` — controlled expiration/side/
+  strike/limit values, raw unnormalized change callbacks, and loading-state
+  rendering.
+- `components/OptionChainTable.test.tsx` — not-requested/empty/populated
+  rendering states, moneyness presentation, selection state, and the
+  `onAnalyze` callback contract.
+- `components/PositionLens.test.tsx` — header/contract identity,
+  position-mode tabs, long/short/call/put analysis rendering, and Close
+  behavior.
+- `App.test.tsx` — App-level workflow characterization against mocked API
+  responses: initial state, ticker search (success, validation, and
+  errors), option-chain loading (success, validation, and errors), Position
+  Lens open/switch/close, Vertical Spread Builder open/close, and
+  stale-state clearing on a new ticker search or a chain reload.
+
+Lint command:
+
+```bash
+npm run lint
+```
+
+Confirmed result: passes with no errors.
 
 Production build command:
 
@@ -245,18 +380,18 @@ Confirmed result:
 
 ```text
 tsc -b && vite build
-21 modules transformed
+27 modules transformed
 Production build completed successfully
 ```
 
+Bundle size: approximately 220.97 kB raw / 67.47 kB gzip.
+
 Known frontend coverage gaps include:
 
-- `App.tsx` state management (ticker search, chain loading, error/loading
-  states) as a whole.
-- API orchestration and rendering of market-snapshot and option-chain
-  responses.
 - End-to-end/browser-level tests (current coverage is component-level via
-  React Testing Library plus pure-calculation tests).
+  React Testing Library, App-level workflow characterization tests, and
+  pure-calculation tests; there is no automated browser-driven end-to-end
+  suite).
 
 ### Continuous integration
 
@@ -318,12 +453,15 @@ tests, and the production build.
 
 ## Recommended next tasks
 
-1. Refactor the growing `App.tsx` into smaller focused components.
-2. Add provider retry/backoff and a caching layer for Alpaca requests.
-3. Expand backend HTTP and database integration coverage (`TestClient`,
+1. Create and merge the `refactor/frontend-app-decomposition` pull request.
+2. Add provider retry/backoff for Alpaca requests.
+3. Add a caching layer for market-data requests.
+4. Expand backend HTTP and database integration coverage (`TestClient`,
    `/tickers`, `/health`, and Alpaca error-translation tests).
-4. Add safe authentication, authorization, and rate limiting before any
+5. Add safe authentication, authorization, and rate limiting before any
    public deployment.
-5. Plan production deployment for the API, database, and frontend.
-6. Evaluate the next analytics feature: additional multi-leg strategies,
+6. Plan production deployment for the API, database, and frontend.
+7. Evaluate the next analytics feature: additional multi-leg strategies,
    theoretical pricing, or implied-volatility tools.
+8. Address the default strike-window floating-point rounding described in
+   "Known behavior" above as a separate, focused fix.

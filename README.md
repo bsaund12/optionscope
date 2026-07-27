@@ -8,6 +8,9 @@ OptionScope is an options-analysis platform.
 - Stock quotes and market snapshots.
 - Option-chain exploration, including expiration lookup and nearest-strike,
   filtered, at-the-money-centered chain retrieval.
+- Frontend ticker search with live market-snapshot display and configurable
+  option-chain filtering (calls only, puts only, or both, plus strike range
+  and result limit).
 - Single-leg Position Lens analysis for long calls, short calls, long puts,
   and short puts, using option-chain data already loaded in the browser.
 - Vertical Spread Builder analysis for bull call, bear call, bear put, and
@@ -33,6 +36,28 @@ fallback when the preferred quote is unavailable.
 Greek values shown are passed through from Alpaca; OptionScope does not yet
 compute them itself.
 
+## Frontend architecture
+
+`App.tsx` owns application workflow state (the searched ticker, loaded
+snapshot, option-chain filters, loaded chain, Position Lens selection, and
+Vertical Spread Builder visibility) and orchestrates all API requests.
+Presentation is split into focused, controlled components that receive their
+data and callbacks as props and hold no state of their own:
+
+- `MarketSearchForm` — the ticker-search form.
+- `MarketSnapshot` — the market-snapshot metrics.
+- `OptionChainControls` — expiration, chain-side, strike, and result-limit
+  filters.
+- `OptionChainTable` — a single option-chain side (calls or puts).
+- `PositionLens` — single-leg position analysis.
+- `VerticalSpreadBuilder` — vertical-spread analysis.
+
+Shared display and moneyness-classification helpers used across these
+components live in `frontend/src/marketView.ts`. Position and vertical-spread
+payoff calculations remain centralized in `frontend/src/positionLens.ts` and
+`frontend/src/verticalSpreads.ts`; the React components render those
+calculation results rather than duplicating the formulas.
+
 ## Planned / roadmap
 
 The following are not yet implemented:
@@ -51,10 +76,18 @@ targeting `main` and on pushes to `main`.
 - The `backend` job starts PostgreSQL, runs Alembic migrations, and runs
   `pytest`.
 - The `frontend` job runs `npm ci`, the Vitest test suite, and the
-  production build.
+  production build (which includes a TypeScript compilation check).
 
-Latest verified results: 72 backend tests passing, and 3 frontend test files
-(34 tests) passing.
+Latest verified results: 72 backend tests passing, and 10 frontend test files
+(173 tests) passing. The production build, TypeScript compilation, and
+`eslint` all pass. The frontend suite covers pure calculation logic (Position
+Lens and vertical-spread math), pure formatting and moneyness-classification
+helpers, focused tests for each presentation component, and App-level
+workflow characterization tests (ticker search, option-chain loading,
+Position Lens, and Vertical Spread Builder flows) against mocked API
+responses. There is no automated browser-level end-to-end test suite; the
+application was also manually smoke-tested locally across multiple tickers
+and the workflows above.
 
 ## Local development
 
