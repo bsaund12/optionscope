@@ -17,46 +17,17 @@ import {
   getPositionLabel,
   getPositionModesForContract,
   type PositionMode,
-  type PositionOutcome,
 } from "./positionLens";
 
-function numberFromApiValue(value: ApiDecimal): number | null {
-  if (value === null) {
-    return null;
-  }
+import {
+  formatCurrency,
+  formatCurrencyNumber,
+  formatOutcome,
+  getQuoteSourceLabel,
+  numberFromApiValue,
+} from "./format";
 
-  const parsedValue = Number(value);
-
-  return Number.isFinite(parsedValue) ? parsedValue : null;
-}
-
-function formatCurrency(value: ApiDecimal): string {
-  const parsedValue = numberFromApiValue(value);
-
-  if (parsedValue === null) {
-    return "—";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(parsedValue);
-}
-
-function formatCurrencyNumber(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) {
-    return "—";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
+import VerticalSpreadBuilder from "./components/VerticalSpreadBuilder";
 
 function formatNumber(value: number | null): string {
   if (value === null) {
@@ -117,40 +88,6 @@ function formatTimestamp(value: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-function formatOutcome(outcome: PositionOutcome): string {
-  if (outcome.kind === "unlimited") {
-    return "Unlimited";
-  }
-
-  if (outcome.kind === "unavailable") {
-    return "—";
-  }
-
-  return formatCurrencyNumber(outcome.amount);
-}
-
-function getQuoteSourceLabel(
-  quoteSource:
-    | "ask"
-    | "bid"
-    | "last_trade"
-    | "unavailable",
-): string {
-  if (quoteSource === "ask") {
-    return "using ask";
-  }
-
-  if (quoteSource === "bid") {
-    return "using bid";
-  }
-
-  if (quoteSource === "last_trade") {
-    return "using last trade";
-  }
-
-  return "quote unavailable";
 }
 
 function getDefaultStrikeWindow(referencePrice: ApiDecimal): {
@@ -532,6 +469,8 @@ export default function App() {
   const [selectedPosition, setSelectedPosition] =
     useState<PositionMode | null>(null);
 
+  const [isSpreadBuilderOpen, setIsSpreadBuilderOpen] = useState(false);
+
   const [marketLoading, setMarketLoading] = useState(false);
   const [chainLoading, setChainLoading] = useState(false);
 
@@ -561,6 +500,7 @@ export default function App() {
     setChain(null);
     setSelectedContract(null);
     setSelectedPosition(null);
+    setIsSpreadBuilderOpen(false);
 
     try {
       const [nextSnapshot, expirationResponse] = await Promise.all([
@@ -626,6 +566,7 @@ export default function App() {
     setChainError(null);
     setSelectedContract(null);
     setSelectedPosition(null);
+    setIsSpreadBuilderOpen(false);
 
     try {
       const nextChain = await getOptionChain({
@@ -934,6 +875,24 @@ export default function App() {
                   More contracts may exist than the number currently shown.
                 </span>
               </section>
+            ) : null}
+
+            {!isSpreadBuilderOpen ? (
+              <div className="spread-builder-toggle">
+                <button
+                  type="button"
+                  onClick={() => setIsSpreadBuilderOpen(true)}
+                >
+                  Build a vertical spread
+                </button>
+              </div>
+            ) : null}
+
+            {isSpreadBuilderOpen ? (
+              <VerticalSpreadBuilder
+                chain={chain}
+                onClose={() => setIsSpreadBuilderOpen(false)}
+              />
             ) : null}
 
             {selectedContract && selectedPosition ? (
